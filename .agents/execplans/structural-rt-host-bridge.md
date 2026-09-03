@@ -66,8 +66,9 @@ physical pipeline.
   has no ray-tracing pipeline, table, or dispatch implementation.
 - [x] (2026-09-03 02:36Z) Published final validation documentation and clang-format-only wrapping of
   the native bridge test as `28ee791bc4cb58b071e4d6c873b214dbc2d6a98c`.
-- [ ] Publish the Falcor submodule URL/pin and final report/checklist, then record the outer commit in
-  Falcor's change ledger.
+- [x] (2026-09-03 02:42Z) Published the Falcor fork URL, SlangPy gitlink, plan, and validation ledger
+  in outer commit `7a37064f0aa04b7863152c4f4954be3ba8df00ff`. The Falcor-owned ledger records
+  subsequent documentation-only advancement to this final ExecPlan revision.
 
 ## Surprises and Discoveries
 
@@ -463,3 +464,6 @@ and recorded the formatting-only native-test normalization in the validation fol
 Revision note, 2026-09-03: made the clean-environment setup install the complete development
 requirements, including pre-commit and pyright, and placed dependency installation under the Linux
 descendant-process limiter.
+
+Revision note, 2026-09-03: recorded the published Falcor Phase 0-1 integration commit and closed the
+last progress item; any later outer gitlink/report-only commit is tracked in Falcor's own ledger.
