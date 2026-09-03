@@ -263,8 +263,7 @@ TEST_CASE_GPU("structural ray tracing native bridge")
     {
         ref<SlangModule> module = session->load_module_from_source("structural_entry_point_test", k_structural_source);
 
-        ref<sgl::SlangEntryPoint> closest_hit
-            = module->checked_entry_point("ClosestHit0", ShaderStage::closest_hit);
+        ref<sgl::SlangEntryPoint> closest_hit = module->checked_entry_point("ClosestHit0", ShaderStage::closest_hit);
         REQUIRE(closest_hit);
         CHECK_EQ(closest_hit->stage(), ShaderStage::closest_hit);
         CHECK_EQ(closest_hit->name(), "ClosestHit0");
@@ -316,8 +315,7 @@ TEST_CASE_GPU("structural ray tracing native bridge")
         ref<SlangModule> composed = session->compose_modules("structural_composed_test", {support, module});
         ref<SlangModule> nested = session->compose_modules("structural_nested_composed_test", {support, composed});
 
-        ref<sgl::SlangEntryPoint> entry_point
-            = nested->checked_entry_point("Miss2", ShaderStage::miss);
+        ref<sgl::SlangEntryPoint> entry_point = nested->checked_entry_point("Miss2", ShaderStage::miss);
         REQUIRE(entry_point);
         CHECK_EQ(entry_point->module(), module.get());
         CHECK_EQ(entry_point->stage(), ShaderStage::miss);
@@ -349,8 +347,7 @@ TEST_CASE_GPU("structural ray tracing native bridge")
         );
 
         REQUIRE_EQ(bindings.entry_points.size(), 6);
-        ref<const TraceProgramLayoutInfo> sparse_layout
-            = module->layout()->find_trace_program_layout("SparseLayout");
+        ref<const TraceProgramLayoutInfo> sparse_layout = module->layout()->find_trace_program_layout("SparseLayout");
         REQUIRE(sparse_layout);
         std::map<std::string, std::string> expected_export_names;
         auto add_expected_stage = [&](const std::optional<TraceProgramStageInfo>& stage)
@@ -429,10 +426,7 @@ TEST_CASE_GPU("structural ray tracing native bridge")
         REQUIRE_EQ(namespaced_layout->miss_groups.size(), 1);
         REQUIRE(namespaced_layout->miss_groups[0].miss);
         CHECK_EQ(namespaced.entry_points[0]->desc().name, "NamespacedStages.Miss");
-        CHECK_EQ(
-            namespaced.entry_points[0]->name(),
-            namespaced_layout->miss_groups[0].miss->entry_point_name
-        );
+        CHECK_EQ(namespaced.entry_points[0]->name(), namespaced_layout->miss_groups[0].miss->entry_point_name);
         REQUIRE_EQ(namespaced.miss_entry_points.size(), 1);
         CHECK_EQ(namespaced.miss_entry_points[0], namespaced.entry_points[0]->name());
     }

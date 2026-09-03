@@ -16,8 +16,9 @@ generated `raygen_main`, and dispatch through the existing D3D12, Vulkan, or CUD
 pipeline path.
 
 The visible proof is a small triangle canary. A generated SlangPy ray-generation shader traces rays
-through a structural layout and writes exact expected hit and miss colors. The existing legacy
-ray-tracing canary remains unchanged and passing.
+through a structural layout and checks four specified hit/miss corner values with
+`numpy.allclose(..., atol=0.01)` (and NumPy's default `rtol`). The existing legacy ray-tracing
+canary remains unchanged and passing.
 
 This plan covers Falcor port phases 0 and 1 only. It does not port a Falcor renderer, add Metal
 runtime ray tracing, add hardware linear-swept-sphere support, preserve shader execution reordering,
@@ -37,28 +38,34 @@ physical pipeline.
   SlangPy against that source and its matching Release artifacts, completed a capped Debug build,
   imported the in-tree package with CPython 3.12, and passed the unchanged Vulkan/CUDA device and
   legacy ray-tracing canaries (4 tests).
-- [x] (2026-09-03 16:24Z) Implemented and tested stage-aware checked entry-point lookup in native
+- [x] (2026-09-02 23:24Z) Implemented and tested stage-aware checked entry-point lookup in native
   SGL, including nested composed-module resolution, ambiguity rejection, and explicit actual-stage
   verification.
-- [x] (2026-09-03 16:24Z) Implemented and tested lifetime-safe structural trace-layout snapshots for
+- [x] (2026-09-02 23:24Z) Implemented and tested lifetime-safe structural trace-layout snapshots for
   hit, miss, and callable groups.
-- [x] (2026-09-03 16:24Z) Implemented and tested conversion from one reflected structural layout to
-  existing SGL pipeline and sparse shader-table descriptors. The native test passes 69 assertions,
-  including reversed declaration order, holes, trailing minimum counts, invalid slots, and
-  unsupported non-empty records.
-- [x] (2026-09-03 16:24Z) Exposed the bridge through nanobind and added the single-layout
+- [x] (2026-09-02 23:24Z) Implemented and tested conversion from one reflected structural layout to
+  existing SGL pipeline and sparse shader-table descriptors. The final focused native test passes
+  131 assertions, including reversed declaration order, holes, trailing minimum counts, invalid
+  slots, collision-safe hit-group names, ownership, and unsupported non-empty records.
+- [x] (2026-09-02 23:24Z) Exposed the bridge through nanobind and added the single-layout
   `trace_program_layout` SlangPy functional option, mutually exclusive with legacy group lists and
   included in deterministic pipeline/cache identity.
-- [x] (2026-09-03 16:24Z) Added and ran the generated-raygen structural triangle canary while keeping
+- [x] (2026-09-02 23:24Z) Added and ran the generated-raygen structural triangle canary while keeping
   the legacy canary passing. Both tests dispatch successfully on Linux Vulkan and CUDA.
-- [x] (2026-09-03 00:59Z) Completed the final capped Linux Debug rebuild, generated the nanobind
+- [x] (2026-09-03 00:59Z) Completed the final SlangPy-source capped Linux Debug rebuild, generated the nanobind
   API stub, passed pre-commit and pyright with no findings, passed the focused native bridge test
   (1 test, 131 assertions), passed all 197 native SGL tests in three sequential bounded shards, and
   passed the Python configuration and Vulkan/CUDA legacy-plus-structural suites (13 tests total).
-- [ ] Run the phase-one canary on available local Windows, Linux, and macOS lanes, recording any
-  compile-only backend limitation explicitly.
-- [ ] Commit and push the SlangPy implementation, update the Falcor submodule pin, and record both
-  commits and validation evidence in Falcor's change ledger.
+- [x] (2026-09-03 02:30Z) Completed final-SHA local-runner validation. Linux passed the Vulkan and
+  CUDA legacy-plus-structural canaries; Windows passed the D3D12, Vulkan, and CUDA pairs; macOS
+  passed native/configuration coverage and compiled Slang's compiler-owned structural closest-hit,
+  miss, and raygen fixture to non-empty Metal AIR. Metal remains compile-only because the pinned RHI
+  has no ray-tracing pipeline, table, or dispatch implementation.
+- [x] (2026-09-03 01:05Z) Committed and pushed the SlangPy implementation as
+  `c2e73c0b1b0eed0577e544e6abdadfa1d32f7910` on
+  `kaizhangNV/slangpy:codex/structural-rt-host-bridge`.
+- [x] (2026-09-03 02:30Z) Prepared the Falcor submodule URL/pin and final report/checklist for
+  publication; the Falcor-owned change ledger records the resulting outer-repository commit.
 
 ## Surprises and Discoveries
 
@@ -67,10 +74,11 @@ physical pipeline.
   Evidence: the baseline checkout reported detached HEAD at `1c0dddde...`; `gh repo view` resolved
   the existing fork. The branch and two-remote arrangement are now established locally.
 
-- Observation: the exact clean structural Slang checkout is
-  `/home/zhangkai/Documents/slangwork/slang-core-ecosys/another-slang-rt-recovery` at
-  `b0f010593568239005df17c30ea875c0edf25049`; the similarly named `another-slang` checkout is on a
-  different dirty revision and must not be used accidentally.
+- Observation: the structural Slang checkout used for this work is
+  `/home/zhangkai/Documents/slangwork/slang-core-ecosys/another-slang-rt-recovery`. It started from
+  `b0f010593568239005df17c30ea875c0edf25049` and now ends at the published Phase 1 dependency
+  `b035d437be74e1ffb6c671c4e6630f07326e300b`; the similarly named `another-slang` checkout is a
+  different dirty checkout and must not be used accidentally.
   Evidence: `git rev-parse HEAD` and `git status --short --branch` were recorded for both checkouts.
 
 - Observation: the unmodified optimized SlangPy build reaches the nanobind extension link and then
@@ -97,11 +105,11 @@ physical pipeline.
   triangle/custom attribute parameters after the normal entry-point input canonicalization pass;
   CUDA varying legalization therefore converted uses into invalid pointer field access or
   pointer-to-pointer calls.
-  Evidence: the failure reproduced directly with Slang's existing portable attribute tests and
-  NVRTC. Compiler commit `7b2bf16a65406ad4fc5973b78c05bc044e57dc24` reruns canonical input
-  translation after late structural lowering and adds four PTX/NVRTC lanes. The complete portable
-  structural target folder then passed 76/76 tests, and the SlangPy CUDA canary dispatched with the
-  expected four exact colors.
+  Evidence: the failure reproduced directly with Slang's portable attribute tests and CUDA runtime
+  dispatch. Compiler commit `7b2bf16a65406ad4fc5973b78c05bc044e57dc24` reruns canonical input
+  translation after late structural lowering and adds four PTX FileCheck lanes. The complete
+  portable structural target folder then passed 76/76 tests, and the SlangPy CUDA canary matched
+  the four expected corner values within its `atol=0.01` comparison.
 
 - Observation: stage-aware materialization succeeds without a new public Slang reflection API for
   the controlled Phase 1 module graph.
@@ -134,6 +142,22 @@ physical pipeline.
   Evidence: independent review traced the shared lookup on Vulkan, D3D12, and CUDA. The adapter now
   reserves every reflected stage export plus SlangPy's `raygen_main` before choosing deterministic
   hit-group names, and the native regression forces the formerly colliding spelling.
+
+- Observation: the structural Metal raygen compiler fixture did not terminate with a Release Clang
+  compiler even though it completed with GCC and Debug Clang.
+  Evidence: `_inlineCandidateOperationCalls()` placed the mutating `inlineCall()` inside
+  `SLANG_ASSERT`; Release Clang lowers that assertion to `__builtin_assume` and discards the
+  side-effecting operand, so the fixed-point loop selected the same call forever. Compiler commit
+  `b035d437be74e1ffb6c671c4e6630f07326e300b` evaluates `inlineCall()` before asserting its result.
+  The exact macOS ARM64 Release fixture then generated Metal and non-empty AIR for raygen,
+  closest-hit, and miss.
+
+- Observation: descriptive versions depend on the tags visible in the checkout. Fresh-worker
+  `slangc -version` output from the fork is `2024.0.7-3799-gb035d437b`, while local `git describe`
+  with upstream tags is `v2026.16-93-gb035d437b` for the same source commit.
+  Evidence: every acceptance run also verifies the full commit
+  `b035d437be74e1ffb6c671c4e6630f07326e300b`; that full SHA, rather than the descriptive version
+  string, is the authoritative dependency identity.
 
 ## Decision Log
 
@@ -169,15 +193,27 @@ physical pipeline.
   varying legalizers and is covered by reusable compiler tests.
   Date/Author: 2026-09-03 / Codex.
 
+- Decision: make the Metal adapter inlining mutation unconditional and retain the assertion only as
+  a postcondition.
+  Rationale: assertion expressions must not carry required side effects; Release compilers are
+  permitted to erase them. The two-statement form is portable and preserves the debug invariant.
+  Date/Author: 2026-09-03 / Codex.
+
 ## Outcomes and Retrospective
 
-Phase 0 and the local Linux implementation portion of Phase 1 are complete. The bridge reflects one
-structural layout, resolves synthesized stages by name and native stage, preserves sparse SBT slots,
-and reuses the existing pipeline and generated-raygen path. After the companion compiler fix, the
-native bridge passes 131/131 assertions, all 197 native SGL tests pass in bounded sequential shards,
-the focused Python configuration/runtime suite passes 13/13, the portable structural compiler
-suite passes 78/78, and legacy plus structural dispatch succeeds on both Vulkan and CUDA.
-Cross-platform worker execution, commits, and the Falcor submodule/report update remain in progress.
+The bridge reflects one structural layout, resolves synthesized stages by name and native stage,
+preserves sparse SBT slots, and reuses the existing pipeline and generated-raygen path. The source
+implementation is published as `c2e73c0b1b0eed0577e544e6abdadfa1d32f7910`. On the final compiler
+SHA, Linux passes all 197 native SGL tests in bounded sequential shards, the 9 configuration tests,
+and all four legacy-plus-structural Vulkan/CUDA runtime cases. Windows passes all 197 native tests,
+the 9 configuration tests, and all six legacy-plus-structural D3D12/Vulkan/CUDA runtime cases. Its
+inline control passes compute RayQuery on D3D12/Vulkan, skips CUDA because that device reports ray
+queries unsupported, and passes pipeline ray launch on all three backends. macOS passes all 197
+native tests and the 9 configuration tests and compiles the compiler-owned structural
+raygen/closest-hit/miss fixture to non-empty Metal AIR. The portable structural compiler suite
+passed 78/78 before the final Metal-only fix; the final fix separately passes the focused fixture,
+all 18 structural Metal tests, and macOS Release Metal/AIR generation. Phase 0 and Phase 1 are
+complete; no Falcor renderer source was changed.
 
 ## Context and Orientation
 
@@ -199,7 +235,7 @@ files. Existing ray-tracing tests are the behavioral baseline and must remain su
 
 The compiler checkout used by this work is
 `/home/zhangkai/Documents/slangwork/slang-core-ecosys/another-slang-rt-recovery` at commit
-`8bc787db46d61f3816528a5eb08709a379074d54`, based on the original structural checkpoint
+`b035d437be74e1ffb6c671c4e6630f07326e300b`, based on the original structural checkpoint
 `b0f010593568239005df17c30ea875c0edf25049`. SlangPy must use both headers and libraries from that
 same checkout. Substituting only a shared library could create an experimental API/ABI mismatch.
 
@@ -231,8 +267,9 @@ existing generated `raygen_main`, call-data marshalling, root shader-object bind
 and dispatch path.
 
 Finally, add the minimal structural triangle canary. It must exercise a generated raygen linked to
-synthesized miss and closest-hit stages and compare exact output values, including both hit and miss
-rays. Add focused native tests for reflection, checked lookup, negative/duplicate slots, sparse slots,
+synthesized miss and closest-hit stages and compare the four specified corner values with the
+existing `numpy.allclose(..., atol=0.01)` tolerance, including both hit and miss rays. Add focused
+native tests for reflection, checked lookup, negative/duplicate slots, sparse slots,
 and declaration-order independence. Build before testing as required by `AGENTS.md`, run pre-commit,
 and then validate the same snapshot on available local runners.
 
@@ -279,12 +316,14 @@ against that exact compiler with the eight-job cap, and an unchanged baseline im
 passes.
 
 Phase 1 is accepted when the legacy ray-tracing canary still passes and the new structural canary
-uses a SlangPy-generated `raygen_main` to dispatch at least one hit ray and one miss ray with exact
-expected output. Focused native tests must prove checked stage lookup and exact sparse-slot
+uses a SlangPy-generated `raygen_main` to dispatch at least one hit ray and one miss ray and match
+the four specified corner values under `numpy.allclose(..., atol=0.01)` with NumPy's default
+`rtol`. Focused native tests must prove checked stage lookup and exact sparse-slot
 placement. Negative and duplicate slot inputs must fail with clear diagnostics. The available
 Windows D3D12, Vulkan, and CUDA lanes should execute the canary where supported. macOS initially
-proves structural Metal compilation/code generation because the pinned Metal RHI does not implement
-pipeline ray-tracing dispatch.
+proves structural Metal compilation/code generation with Slang's compiler-owned structural fixture
+because the pinned Metal RHI does not implement pipeline ray-tracing dispatch; this is not a
+SlangPy-canary runtime claim.
 
 The implementation is not complete if it hard-codes the canary's group names in Python, compacts
 sparse slots, relies on reflection enumeration order, mixes legacy and structural shader APIs into
@@ -318,8 +357,9 @@ The canonical source revisions at the start of the work are:
 
 The Phase 1 compiler dependency is:
 
-    Slang: 8bc787db46d61f3816528a5eb08709a379074d54
-           (includes 7b2bf16a65406ad4fc5973b78c05bc044e57dc24)
+    Slang: b035d437be74e1ffb6c671c4e6630f07326e300b
+           (includes 7b2bf16a65406ad4fc5973b78c05bc044e57dc24 and
+            8bc787db46d61f3816528a5eb08709a379074d54)
            kaizhangNV/slang, branch codex/structural-rt-cuda-hit-attributes
 
 ## Interfaces and Dependencies
@@ -331,8 +371,8 @@ conformances)` method,
 `SlangModule.structural_ray_tracing_bindings(...)`; the high-level functional option is
 `FunctionNode.ray_tracing(trace_program_layout=...)`.
 
-The Python interface will add one optional, typed parameter to `FunctionNode.ray_tracing`, initially
-spelled `trace_program_layout: str | None`. Supplying it together with legacy `hit_groups`,
+The Python interface adds one optional, typed parameter to `FunctionNode.ray_tracing`, spelled
+`trace_program_layout: str | None`. Supplying it together with legacy `hit_groups`,
 `miss_entry_points`, `hit_group_names`, or `callable_entry_points` must raise a clear error. Existing
 legacy callers must observe no behavior change.
 
@@ -347,6 +387,11 @@ Revision note, 2026-09-03: recorded the implemented bridge interfaces, local val
 CUDA attribute-lowering defect and companion compiler fix, and the remaining cross-platform and
 publication work.
 
-Revision note, 2026-09-03: recorded final compiler commit `8bc787db4`, deterministic structural
-stage naming, final Linux validation, the bounded native-test sharding gate, and the optional
-documentation-extraction dependency distinction.
+Revision note, 2026-09-03: recorded compiler commits `8bc787db4` and `b035d437b`, deterministic
+structural stage naming, the Release-Clang Metal hang repair, final Linux/macOS validation, the
+bounded native-test sharding gate, and the optional documentation-extraction dependency
+distinction.
+
+Revision note, 2026-09-03: recorded final-SHA Windows D3D12/Vulkan/CUDA validation, the inline
+RayQuery control result, the macOS compile-only boundary, and Phase 0-1 completion without Falcor
+renderer changes.
