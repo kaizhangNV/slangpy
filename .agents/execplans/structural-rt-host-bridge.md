@@ -8,12 +8,12 @@ This plan follows `.agents/PLANS.md` from the SlangPy repository root.
 ## Purpose / Big Picture
 
 Slang's structural ray-tracing API declares hit, miss, and callable groups in a typed
-`ITraceProgramLayout`. SlangPy currently accepts only manually named legacy shader entry points and
-hit groups. After this change, a SlangPy ray-tracing call can name one structural trace-program
-layout, and the host bridge will reflect that layout, resolve each synthesized stage with its native
-shader stage, preserve every explicit shader-binding-table slot, link those stages with SlangPy's
-generated `raygen_main`, and dispatch through the existing D3D12, Vulkan, or CUDA ray-tracing
-pipeline path.
+`ITraceProgramLayout`. Before this change, SlangPy accepted only manually named legacy shader entry
+points and hit groups. With the implemented bridge, a SlangPy ray-tracing call can name one
+structural trace-program layout. The bridge reflects that layout, resolves each synthesized stage
+with its native shader stage, preserves every explicit shader-binding-table slot, links those stages
+with SlangPy's generated `raygen_main`, and dispatches through the existing D3D12, Vulkan, or CUDA
+ray-tracing pipeline path.
 
 The visible proof is a small triangle canary. A generated SlangPy ray-generation shader traces rays
 through a structural layout and checks four specified hit/miss corner values with
@@ -34,7 +34,7 @@ physical pipeline.
 - [x] (2026-09-02 22:55Z) Created Falcor branch `codex/structural-rt-port` at
   `046545b1d3dac23e9ba1a75498eb75f6c9280dfc` and initialized its missing pinned data,
   MaterialX, and OpenPBR submodules.
-- [x] (2026-09-03 07:04Z) Rebuilt and verified structural Slang at `b0f010593...`, configured
+- [x] (2026-09-02) Rebuilt and verified structural Slang at `b0f010593...`, configured
   SlangPy against that source and its matching Release artifacts, completed a capped Debug build,
   imported the in-tree package with CPython 3.12, and passed the unchanged Vulkan/CUDA device and
   legacy ray-tracing canaries (4 tests).
@@ -56,16 +56,18 @@ physical pipeline.
   API stub, passed pre-commit and pyright with no findings, passed the focused native bridge test
   (1 test, 131 assertions), passed all 197 native SGL tests in three sequential bounded shards, and
   passed the Python configuration and Vulkan/CUDA legacy-plus-structural suites (13 tests total).
+- [x] (2026-09-03 01:05Z) Committed and pushed the SlangPy implementation as
+  `c2e73c0b1b0eed0577e544e6abdadfa1d32f7910` on
+  `kaizhangNV/slangpy:codex/structural-rt-host-bridge`.
 - [x] (2026-09-03 02:30Z) Completed final-SHA local-runner validation. Linux passed the Vulkan and
   CUDA legacy-plus-structural canaries; Windows passed the D3D12, Vulkan, and CUDA pairs; macOS
   passed native/configuration coverage and compiled Slang's compiler-owned structural closest-hit,
   miss, and raygen fixture to non-empty Metal AIR. Metal remains compile-only because the pinned RHI
   has no ray-tracing pipeline, table, or dispatch implementation.
-- [x] (2026-09-03 01:05Z) Committed and pushed the SlangPy implementation as
-  `c2e73c0b1b0eed0577e544e6abdadfa1d32f7910` on
-  `kaizhangNV/slangpy:codex/structural-rt-host-bridge`.
-- [x] (2026-09-03 02:30Z) Prepared the Falcor submodule URL/pin and final report/checklist for
-  publication; the Falcor-owned change ledger records the resulting outer-repository commit.
+- [x] (2026-09-03 02:36Z) Published final validation documentation and clang-format-only wrapping of
+  the native bridge test as `28ee791bc4cb58b071e4d6c873b214dbc2d6a98c`.
+- [ ] Publish the Falcor submodule URL/pin and final report/checklist, then record the outer commit in
+  Falcor's change ledger.
 
 ## Surprises and Discoveries
 
@@ -215,6 +217,13 @@ passed 78/78 before the final Metal-only fix; the final fix separately passes th
 all 18 structural Metal tests, and macOS Release Metal/AIR generation. Phase 0 and Phase 1 are
 complete; no Falcor renderer source was changed.
 
+The accepted Phase 1 scope is deliberately bounded. It supports one layout per call and concrete,
+non-generic stage types declared in one enumerable source-module leaf. Imported-only and generic
+stages remain unsupported; the bridge rejects the same fully qualified name in multiple leaves and
+does not support one source type reused for several native stages. Non-empty shader records are
+rejected. Runtime selection of nonzero sparse slots, actual multi-pipeline cache behavior,
+structural hot reload, and Metal runtime dispatch remain explicit follow-up work.
+
 ## Context and Orientation
 
 The SlangPy repository in this plan is the Falcor submodule at `external/slangpy`. Its native SGL
@@ -261,10 +270,11 @@ cannot be materialized. Non-empty shader-record data is outside phase 1 and must
 rather than silently ignored.
 
 Fourth, expose the single-layout option through nanobind and `FunctionNode.ray_tracing`. Structural
-and legacy group arguments must be mutually exclusive. The selected layout and every pipeline-
-affecting option must participate in functional-call and pipeline cache identity. Reuse SlangPy's
-existing generated `raygen_main`, call-data marshalling, root shader-object binding, pipeline cache,
-and dispatch path.
+and legacy group arguments must be mutually exclusive. The functional-call and pipeline cache
+signature must include the structural/legacy mode, layout name, hit-group definitions and names,
+miss and callable lists, recursion depth, payload size, attribute size, and pipeline flags. Reuse
+SlangPy's existing generated `raygen_main`, call-data marshalling, root shader-object binding,
+pipeline cache, and dispatch path.
 
 Finally, add the minimal structural triangle canary. It must exercise a generated raygen linked to
 synthesized miss and closest-hit stages and compare the four specified corner values with the
@@ -276,37 +286,73 @@ and then validate the same snapshot on available local runners.
 ## Concrete Steps
 
 All native builds on Linux run through the descendant-process limiter and pass an explicit limit of
-eight jobs. Configure commands also set the environment limits because dependency probes or Python
-build helpers may compile code.
+eight jobs or less. Configure commands also set environment limits because dependency probes or
+Python build helpers may compile code. The accepted clean Linux compiler build used four jobs after
+GCC 13 failed internally at eight; this lower limit is reproduced below.
 
-From the structural Slang repository, verify the compiler identity and existing build before using
-it:
+From the structural Slang repository, verify and build the exact dependency:
 
-    cd /home/zhangkai/Documents/slangwork/slang-core-ecosys/another-slang-rt-recovery
-    git rev-parse HEAD
+    export SLANG_RT_DIR=/home/zhangkai/Documents/slangwork/slang-core-ecosys/another-slang-rt-recovery
+    export BUILD_LIMITER=/home/zhangkai/.codex/skills/limit-cpp-build-parallelism/scripts/run-limited-build.sh
+    cd "$SLANG_RT_DIR"
+    test "$(git rev-parse HEAD)" = b035d437be74e1ffb6c671c4e6630f07326e300b
+    CMAKE_BUILD_PARALLEL_LEVEL=8 MAX_JOBS=8 "$BUILD_LIMITER" \
+      cmake --preset default -S . --fresh
+    CMAKE_BUILD_PARALLEL_LEVEL=4 MAX_JOBS=4 "$BUILD_LIMITER" \
+      cmake --build build --config Release \
+      --target slangc slang-glslang slang-glsl-module slang-raytracing-module --parallel 4
     build/Release/bin/slangc -version
 
-From the SlangPy repository, configure and build against that exact local compiler. The final preset
-and build directory will be recorded after inspecting the repository's current presets and local
-Slang options. The build invocation must have this shape:
+The expected version suffix is `gb035d437b`; the full Git SHA check is authoritative. From the
+SlangPy repository, configure and build the `linux-gcc` preset against that compiler:
 
     cd /home/zhangkai/Documents/slangwork/slang-core-ecosys/falcor2/external/slangpy
-    CMAKE_BUILD_PARALLEL_LEVEL=8 MAX_JOBS=8 \
-      /home/zhangkai/.codex/skills/limit-cpp-build-parallelism/scripts/run-limited-build.sh \
-      cmake --build --preset <linux-debug-preset> --parallel 8
+    python3 -m venv .venv
+    .venv/bin/python -m pip install --upgrade pip setuptools wheel
+    .venv/bin/python -m pip install 'numpy>=1.26,<3' 'pytest>=8,<9' typing_extensions
+    CMAKE_BUILD_PARALLEL_LEVEL=8 MAX_JOBS=8 "$BUILD_LIMITER" \
+      cmake --preset linux-gcc -S . --fresh \
+      -DSGL_LOCAL_SLANG=ON -DSGL_LOCAL_SLANG_DIR:PATH="$SLANG_RT_DIR" \
+      -DSGL_LOCAL_SLANG_BUILD_DIR=build/Release -DPython_ROOT_DIR:PATH="$PWD/.venv" \
+      -DSGL_BUILD_EXAMPLES=OFF -DSGL_BUILD_TESTS=ON
+    CMAKE_BUILD_PARALLEL_LEVEL=8 MAX_JOBS=8 "$BUILD_LIMITER" \
+      cmake --build build/linux-gcc --config Debug \
+      --target slangpy_ext sgl_tests slangpy_stub --parallel 8
 
-Run the focused native and Python tests only after the build. Test commands that can trigger a build
-or compile shaders also run under the same limiter and expose at most eight workers. Record exact
-test paths and expected values once the baseline test and new canary locations are finalized.
+Run the focused bridge test, the bounded native shards, configuration tests, and both legacy and
+structural canaries from the SlangPy root. These are the exact Linux test shapes:
 
-Before completion, run:
-
-    cd /home/zhangkai/Documents/slangwork/slang-core-ecosys/falcor2/external/slangpy
-    pre-commit run --all-files
+    export PYTHONPATH="$PWD"
+    timeout 300s "$BUILD_LIMITER" build/linux-gcc/Debug/sgl_tests \
+      --test-case='structural ray tracing native bridge' --no-colors=true
+    timeout 300s "$BUILD_LIMITER" build/linux-gcc/Debug/sgl_tests \
+      --test-suite=hot_reload --no-colors=true
+    timeout 300s "$BUILD_LIMITER" build/linux-gcc/Debug/sgl_tests \
+      --test-suite=persistent_cache --no-colors=true
+    timeout 900s "$BUILD_LIMITER" build/linux-gcc/Debug/sgl_tests \
+      --test-suite-exclude=hot_reload,persistent_cache --no-colors=true
+    "$BUILD_LIMITER" .venv/bin/python -m pytest \
+      slangpy/tests/slangpy_tests/test_raytracing_config.py -v --device-types nodevice
+    "$BUILD_LIMITER" .venv/bin/python -m pytest \
+      slangpy/tests/slangpy_tests/test_raytracing.py::test_raytracing \
+      slangpy/tests/slangpy_tests/test_raytracing.py::test_structural_raytracing \
+      -v --device-types vulkan,cuda
+    "$BUILD_LIMITER" .venv/bin/python -m pytest \
+      slangpy/tests/device/test_pipeline.py::test_raytrace_simple \
+      -v -rs --device-types vulkan,cuda
+    .venv/bin/pre-commit run --all-files
+    .venv/bin/pyright
     git diff --check
 
-Run local-worker validation through the external recipe stored under
-`~/.codex/local-build-farm/projects/`; do not commit worker configuration to either repository.
+The focused bridge must report one passing test and 131 assertions. The native shards together must
+report 197 passing tests, configuration must report 9/9, and the legacy/structural runtime command
+must report 4/4. Vulkan compute RayQuery and Vulkan/CUDA pipeline launch pass; CUDA compute RayQuery
+skips when the device reports the feature unsupported.
+
+Cross-platform validation uses the external recipe
+`~/.codex/local-build-farm/projects/falcor2-structural-rt-phase1.json`. It contains the same source
+identity checks plus explicit Windows outer-one/`/MP8` and macOS `--parallel 8` limits. Worker
+snapshots never commit or push, and the recipe remains outside both repositories.
 
 ## Validation and Acceptance
 
@@ -338,10 +384,11 @@ repository's documented build workflow; never replace only the runtime library. 
 fails, preserve its log and rerun from a fresh disposable worker snapshot after fixing the canonical
 Linux workspace.
 
-All source edits occur in the Linux SlangPy and Falcor branches. Worker checkouts never commit or
-push. If the structural adapter proves that current reflection cannot identify the declaring module
-unambiguously, stop that approach, record the failing canary and diagnostic here, and add the
-smallest principled compiler reflection/materialization API in the pinned Slang checkout.
+All source edits occur in the Linux Slang, SlangPy, and Falcor branches. Worker checkouts never
+commit or push. If the structural adapter proves that current reflection cannot identify the
+declaring module unambiguously, stop that approach, record the failing canary and diagnostic here,
+and add the smallest principled compiler reflection/materialization API in the pinned Slang
+checkout.
 
 ## Artifacts and Notes
 
@@ -361,6 +408,19 @@ The Phase 1 compiler dependency is:
            (includes 7b2bf16a65406ad4fc5973b78c05bc044e57dc24 and
             8bc787db46d61f3816528a5eb08709a379074d54)
            kaizhangNV/slang, branch codex/structural-rt-cuda-hit-attributes
+
+The final acceptance runs and concise outcomes are:
+
+    Linux  20260902-185955: 197 native, 9 config, 4 Vulkan/CUDA canaries passed
+    Windows 20260902-191209: 197 native, 9 config, 6 D3D12/Vulkan/CUDA canaries passed;
+                              inline control 5 passed, CUDA compute RayQuery skipped
+    macOS  20260902-185145: 197 native, 9 config, closest-hit/miss/raygen Metal AIR non-empty
+
+The preserved logs are under
+`~/.codex/local-build-farm/runs/falcor2-structural-rt-phase1/<run-id>/<platform>.log`. The macOS
+result is compiler-owned Metal fixture coverage, not SlangPy runtime coverage. Falcor's
+`reports/structural-rt-port-checklist.md` records assertion counts, artifact byte sizes, log hashes,
+worker-only workarounds, and the failed Linux eight-job GCC evidence.
 
 ## Interfaces and Dependencies
 
@@ -395,3 +455,7 @@ distinction.
 Revision note, 2026-09-03: recorded final-SHA Windows D3D12/Vulkan/CUDA validation, the inline
 RayQuery control result, the macOS compile-only boundary, and Phase 0-1 completion without Falcor
 renderer changes.
+
+Revision note, 2026-09-03: replaced stale command placeholders with the exact final Linux build/test
+contract and worker evidence, documented accepted Phase 1 limitations, corrected milestone timing,
+and recorded the formatting-only native-test normalization in the validation follow-up.
