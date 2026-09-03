@@ -308,8 +308,8 @@ SlangPy repository, configure and build the `linux-gcc` preset against that comp
 
     cd /home/zhangkai/Documents/slangwork/slang-core-ecosys/falcor2/external/slangpy
     python3 -m venv .venv
-    .venv/bin/python -m pip install --upgrade pip setuptools wheel
-    .venv/bin/python -m pip install 'numpy>=1.26,<3' 'pytest>=8,<9' typing_extensions
+    "$BUILD_LIMITER" .venv/bin/python -m pip install --upgrade pip setuptools wheel
+    "$BUILD_LIMITER" .venv/bin/python -m pip install -r requirements-dev.txt
     CMAKE_BUILD_PARALLEL_LEVEL=8 MAX_JOBS=8 "$BUILD_LIMITER" \
       cmake --preset linux-gcc -S . --fresh \
       -DSGL_LOCAL_SLANG=ON -DSGL_LOCAL_SLANG_DIR:PATH="$SLANG_RT_DIR" \
@@ -459,3 +459,7 @@ renderer changes.
 Revision note, 2026-09-03: replaced stale command placeholders with the exact final Linux build/test
 contract and worker evidence, documented accepted Phase 1 limitations, corrected milestone timing,
 and recorded the formatting-only native-test normalization in the validation follow-up.
+
+Revision note, 2026-09-03: made the clean-environment setup install the complete development
+requirements, including pre-commit and pyright, and placed dependency installation under the Linux
+descendant-process limiter.
