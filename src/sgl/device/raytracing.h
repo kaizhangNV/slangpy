@@ -5,6 +5,7 @@
 #include "sgl/device/fwd.h"
 #include "sgl/device/types.h"
 #include "sgl/device/device_child.h"
+#include "sgl/device/pipeline.h"
 #include "sgl/device/resource.h"
 
 #include "sgl/math/vector_types.h"
@@ -18,7 +19,10 @@
 
 #include <slang-rhi.h>
 
+#include <string>
+#include <string_view>
 #include <variant>
+#include <vector>
 
 namespace sgl {
 
@@ -352,6 +356,39 @@ struct ShaderTableDesc {
     std::vector<std::string> hit_group_names;
     std::vector<std::string> callable_entry_points;
 };
+
+/// Options controlling how reflected structural groups are placed in native shader-table arrays.
+struct StructuralRayTracingBindingOptions {
+    /// Minimum number of hit-group records, including trailing empty records.
+    uint32_t min_hit_group_count{0};
+    /// Minimum number of miss records, including trailing empty records.
+    uint32_t min_miss_count{0};
+    /// Minimum number of callable records, including trailing empty records.
+    uint32_t min_callable_count{0};
+};
+
+/// Native SGL inputs produced from one structural ray-tracing program layout.
+struct StructuralRayTracingBindings {
+    std::vector<ref<SlangEntryPoint>> entry_points;
+    std::vector<HitGroupDesc> hit_groups;
+    std::vector<std::string> miss_entry_points;
+    std::vector<std::string> hit_group_names;
+    std::vector<std::string> callable_entry_points;
+};
+
+/// Adapt an already reflected structural layout to SGL's existing ray-tracing descriptors.
+SGL_API StructuralRayTracingBindings create_structural_ray_tracing_bindings(
+    const SlangModule* module,
+    const TraceProgramLayoutInfo* layout,
+    const StructuralRayTracingBindingOptions& options = {}
+);
+
+/// Find and adapt a structural layout by name.
+SGL_API StructuralRayTracingBindings create_structural_ray_tracing_bindings(
+    const SlangModule* module,
+    std::string_view layout_name,
+    const StructuralRayTracingBindingOptions& options = {}
+);
 
 class SGL_API ShaderTable : public DeviceChild {
     SGL_OBJECT(ShaderTable)

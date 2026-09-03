@@ -13,6 +13,7 @@
 
 #include <exception>
 #include <map>
+#include <optional>
 #include <set>
 #include <span>
 #include <string>
@@ -442,6 +443,14 @@ public:
     /// Get an entry point, optionally applying type conformances to it.
     ref<SlangEntryPoint>
     entry_point(std::string_view name, std::span<const TypeConformance> type_conformances = {}) const;
+
+    /// Get and validate an entry point for a specific stage, optionally applying type conformances to it.
+    /// This also materializes structural ray-tracing stage types that do not use a `[shader]` attribute.
+    ref<SlangEntryPoint> checked_entry_point(
+        std::string_view name,
+        ShaderStage stage,
+        std::span<const TypeConformance> type_conformances = {}
+    ) const;
     bool has_entry_point(std::string_view name) const;
 
     /// Get root decl ref for this module.
@@ -468,8 +477,11 @@ public:
 
 private:
     /// Create a new entry point with optional type conformances, using full build context.
-    ref<SlangEntryPoint>
-    create_entry_point(std::string_view name, std::span<const TypeConformance> type_conformances = {}) const;
+    ref<SlangEntryPoint> create_entry_point(
+        std::string_view name,
+        std::optional<ShaderStage> requested_stage,
+        std::span<const TypeConformance> type_conformances = {}
+    ) const;
 
     breakable_ref<SlangSession> m_session;
     SlangModuleDesc m_desc;
@@ -526,7 +538,12 @@ struct SGL_API SpecializationArg {
 };
 
 struct SlangEntryPointDesc {
+    /// Source declaration name used to resolve and rebuild the entry point.
     std::string name;
+    /// Optional exported name applied after lookup, conformance composition, and specialization.
+    std::optional<std::string> export_name;
+    /// Stage requested for checked entry-point lookup. Empty keeps legacy name-only lookup behavior.
+    std::optional<ShaderStage> requested_stage;
     std::vector<TypeConformance> type_conformances;
     /// Specialization arguments for generic entrypoints.
     std::vector<SpecializationArg> specialization_args;

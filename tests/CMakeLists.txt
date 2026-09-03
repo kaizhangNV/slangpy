@@ -28,6 +28,7 @@ if(SGL_BUILD_TESTS)
         sgl/device/test_hot_reload.cpp
         sgl/device/test_formats.cpp
         sgl/device/test_shader.cpp
+        sgl/device/test_structural_raytracing.cpp
         sgl/device/test_persistent_cache.cpp
         sgl/device/test_profiler.cpp
         sgl/func/test_base_objects.cpp

@@ -6,6 +6,7 @@
 #include "sgl/device/device.h"
 #include "sgl/device/shader.h"
 #include "sgl/device/reflection.h"
+#include "sgl/device/raytracing.h"
 #include "sgl/device/kernel.h"
 
 namespace sgl {
@@ -146,7 +147,8 @@ SGL_PY_EXPORT(device_shader)
             "dump_intermediates_prefix",
             &SlangCompilerOptions::dump_intermediates_prefix,
             D(SlangCompilerOptions, dump_intermediates_prefix)
-        );
+        )
+        .def_rw("enable_experimental_features", &SlangCompilerOptions::enable_experimental_features);
     nb::implicitly_convertible<nb::dict, SlangCompilerOptions>();
 
     nb::class_<SlangLinkOptions>(m, "SlangLinkOptions", D(SlangLinkOptions))
@@ -253,10 +255,43 @@ SGL_PY_EXPORT(device_shader)
         .def_prop_ro("source_modules", &SlangModule::source_modules, D(SlangModule, source_modules))
         .def(
             "entry_point",
-            &SlangModule::entry_point,
+            nb::overload_cast<std::string_view, std::span<const TypeConformance>>(
+                &SlangModule::entry_point,
+                nb::const_
+            ),
             "name"_a,
             "type_conformances"_a = std::span<const TypeConformance>(),
             D(SlangModule, entry_point)
+        )
+        .def(
+            "entry_point",
+            &SlangModule::checked_entry_point,
+            "name"_a,
+            "stage"_a,
+            "type_conformances"_a = std::span<const TypeConformance>()
+        )
+        .def(
+            "structural_ray_tracing_bindings",
+            [](const SlangModule* self,
+               std::string_view layout_name,
+               uint32_t min_hit_group_count,
+               uint32_t min_miss_count,
+               uint32_t min_callable_count)
+            {
+                return create_structural_ray_tracing_bindings(
+                    self,
+                    layout_name,
+                    {
+                        .min_hit_group_count = min_hit_group_count,
+                        .min_miss_count = min_miss_count,
+                        .min_callable_count = min_callable_count,
+                    }
+                );
+            },
+            "layout_name"_a,
+            "min_hit_group_count"_a = 0,
+            "min_miss_count"_a = 0,
+            "min_callable_count"_a = 0
         );
 
     nb::class_<SlangEntryPoint, Object>(m, "SlangEntryPoint", D(SlangEntryPoint))

@@ -1126,7 +1126,7 @@ std::vector<ref<SlangEntryPoint>> SlangModule::entry_points() const
         for (const auto& module : m_desc.source_modules) {
             for (const auto& ep : module->entry_points()) {
                 if (seen_names.insert(std::string(ep->name())).second)
-                    result.push_back(create_entry_point(ep->name()));
+                    result.push_back(create_entry_point(ep->name(), std::nullopt));
             }
         }
     } else {
@@ -1142,7 +1142,7 @@ std::vector<ref<SlangEntryPoint>> SlangModule::entry_points() const
             std::string name = ep_layout->getNameOverride() ? ep_layout->getNameOverride() : ep_layout->getName();
 
             if (seen_names.insert(name).second)
-                result.push_back(create_entry_point(name));
+                result.push_back(create_entry_point(name, std::nullopt));
         }
     }
 
@@ -1152,7 +1152,17 @@ std::vector<ref<SlangEntryPoint>> SlangModule::entry_points() const
 ref<SlangEntryPoint>
 SlangModule::entry_point(std::string_view name, std::span<const TypeConformance> type_conformances) const
 {
-    return create_entry_point(name, type_conformances);
+    return create_entry_point(name, std::nullopt, type_conformances);
+}
+
+ref<SlangEntryPoint> SlangModule::checked_entry_point(
+    std::string_view name,
+    ShaderStage stage,
+    std::span<const TypeConformance> type_conformances
+) const
+{
+    SGL_CHECK(stage != ShaderStage::none, "Checked entry-point lookup requires a concrete shader stage");
+    return create_entry_point(name, stage, type_conformances);
 }
 
 bool SlangModule::has_entry_point(std::string_view name) const
@@ -1174,17 +1184,184 @@ bool SlangModule::has_entry_point(std::string_view name) const
     return false;
 }
 
-ref<SlangEntryPoint>
-SlangModule::create_entry_point(std::string_view name, std::span<const TypeConformance> type_conformances) const
+namespace {
+
+    void collect_leaf_modules(
+        const SlangModule* module,
+        std::set<const SlangModule*>& seen,
+        std::vector<ref<SlangModule>>& leaves
+    )
+    {
+        if (!seen.insert(module).second)
+            return;
+
+        if (!module->is_composed()) {
+            leaves.push_back(ref(const_cast<SlangModule*>(module)));
+            return;
+        }
+
+        for (const auto& source_module : module->source_modules())
+            collect_leaf_modules(source_module.get(), seen, leaves);
+    }
+
+    std::string module_display_name(const SlangModule* module)
+    {
+        if (!module->path().empty())
+            return fmt::format("{} ({})", module->name(), module->path());
+        return module->name();
+    }
+
+    Slang::ComPtr<slang::IEntryPoint> find_checked_slang_entry_point(
+        slang::IModule* module,
+        std::string_view module_name,
+        std::string_view entry_point_name,
+        ShaderStage requested_stage,
+        std::string* out_error,
+        bool report_success_diagnostics
+    )
+    {
+        SGL_CHECK(module, "Checked entry-point lookup requires a non-composed Slang module");
+
+        Slang::ComPtr<slang::IEntryPoint> entry_point;
+        Slang::ComPtr<ISlangBlob> diagnostics;
+        SlangResult result = SLANG_FAIL;
+        std::string name(entry_point_name);
+        SGL_CATCH_INTERNAL_SLANG_ERROR(
+            result = module->findAndCheckEntryPoint(
+                name.c_str(),
+                static_cast<SlangStage>(requested_stage),
+                entry_point.writeRef(),
+                diagnostics.writeRef()
+            )
+        );
+
+        if (SLANG_FAILED(result) || !entry_point) {
+            if (out_error) {
+                *out_error = append_diagnostics(
+                    fmt::format(
+                        "Module \"{}\" could not materialize entry point \"{}\" for stage {}",
+                        module_name,
+                        entry_point_name,
+                        requested_stage
+                    ),
+                    diagnostics
+                );
+            }
+            return nullptr;
+        }
+
+        slang::ProgramLayout* program_layout = nullptr;
+        slang::EntryPointLayout* entry_point_layout = nullptr;
+        SGL_CATCH_INTERNAL_SLANG_ERROR(program_layout = entry_point->getLayout());
+        if (program_layout)
+            SGL_CATCH_INTERNAL_SLANG_ERROR(entry_point_layout = program_layout->getEntryPointByIndex(0));
+
+        if (!entry_point_layout) {
+            if (out_error) {
+                *out_error = fmt::format(
+                    "Module \"{}\" materialized entry point \"{}\" without entry-point reflection",
+                    module_name,
+                    entry_point_name
+                );
+            }
+            return nullptr;
+        }
+
+        ShaderStage actual_stage = static_cast<ShaderStage>(entry_point_layout->getStage());
+        if (actual_stage != requested_stage) {
+            if (out_error) {
+                *out_error = fmt::format(
+                    "Module \"{}\" resolved entry point \"{}\" as stage {}, but stage {} was requested",
+                    module_name,
+                    entry_point_name,
+                    actual_stage,
+                    requested_stage
+                );
+            }
+            return nullptr;
+        }
+
+        if (report_success_diagnostics)
+            report_diagnostics(diagnostics);
+        return entry_point;
+    }
+
+} // namespace
+
+ref<SlangEntryPoint> SlangModule::create_entry_point(
+    std::string_view name,
+    std::optional<ShaderStage> requested_stage,
+    std::span<const TypeConformance> type_conformances
+) const
 {
     SlangEntryPointDesc desc;
     desc.name = name;
+    desc.requested_stage = requested_stage;
     desc.type_conformances.assign(type_conformances.begin(), type_conformances.end());
 
     // Build a full context with all module data.
     SlangSessionBuild build;
     build.session = session()->_data();
     populate_build_data(build);
+
+    if (requested_stage) {
+        std::set<const SlangModule*> seen;
+        std::vector<ref<SlangModule>> leaves;
+        collect_leaf_modules(this, seen, leaves);
+
+        std::vector<ref<SlangModule>> candidates;
+        std::vector<std::string> errors;
+        for (const auto& leaf : leaves) {
+            std::string error;
+            if (find_checked_slang_entry_point(
+                    leaf->slang_module(),
+                    module_display_name(leaf.get()),
+                    name,
+                    *requested_stage,
+                    &error,
+                    false
+                )) {
+                candidates.push_back(leaf);
+            } else if (!error.empty()) {
+                errors.push_back(std::move(error));
+            }
+        }
+
+        if (candidates.empty()) {
+            std::string message = fmt::format(
+                "Entry point \"{}\" for stage {} was not found in module \"{}\" or any composed source "
+                "module. Structural stages must currently be concrete, non-generic types declared directly in "
+                "an enumerable SGL source-module leaf; declarations reachable only through a Slang import are "
+                "not yet supported.",
+                name,
+                *requested_stage,
+                this->name()
+            );
+            if (!errors.empty())
+                message += fmt::format("\nChecked module diagnostics:\n{}", fmt::join(errors, "\n"));
+            throw SlangCompileError(message);
+        }
+
+        if (candidates.size() > 1) {
+            std::vector<std::string> candidate_names;
+            candidate_names.reserve(candidates.size());
+            for (const auto& candidate : candidates)
+                candidate_names.push_back(module_display_name(candidate.get()));
+            SGL_THROW(
+                "Entry point \"{}\" for stage {} is ambiguous across composed source modules: {}",
+                name,
+                *requested_stage,
+                fmt::join(candidate_names, ", ")
+            );
+        }
+
+        ref<SlangModule> defining_module = candidates.front();
+        desc.type_lookup_module = defining_module;
+        auto entry_point = make_ref<SlangEntryPoint>(defining_module, desc);
+        entry_point->init(build);
+        entry_point->store_built_data(build);
+        return entry_point;
+    }
 
     if (is_composed()) {
         // Search source modules for the entry point
@@ -1222,10 +1399,10 @@ SlangModule::create_entry_point(std::string_view name, std::span<const TypeConfo
     if (slang_ep) {
         // For regular modules, type_lookup_module is the same as the defining module
         desc.type_lookup_module = ref(const_cast<SlangModule*>(this));
-        auto ep = make_ref<SlangEntryPoint>(ref(const_cast<SlangModule*>(this)), desc);
-        ep->init(build);
-        ep->store_built_data(build);
-        return ep;
+        auto entry_point = make_ref<SlangEntryPoint>(ref(const_cast<SlangModule*>(this)), desc);
+        entry_point->init(build);
+        entry_point->store_built_data(build);
+        return entry_point;
     }
 
     SGL_THROW("Entry point \"{}\" not found in module", name);
@@ -1306,28 +1483,32 @@ void SlangEntryPoint::init(SlangSessionBuild& build_data) const
     slang::IModule* slang_module = module_data->slang_module;
 
     auto data = make_ref<SlangEntryPointData>();
+    Slang::ComPtr<slang::IEntryPoint> slang_entry_point;
+
+    if (desc.requested_stage) {
+        std::string error;
+        slang_entry_point = find_checked_slang_entry_point(
+            slang_module,
+            module_display_name(m_module.get()),
+            desc.name,
+            *desc.requested_stage,
+            &error,
+            true
+        );
+        if (!slang_entry_point)
+            throw SlangCompileError(error);
+    } else {
+        SGL_CATCH_INTERNAL_SLANG_ERROR(
+            slang_module->findEntryPointByName(desc.name.c_str(), slang_entry_point.writeRef());
+        );
+        if (!slang_entry_point)
+            SGL_THROW("Entry point \"{}\" not found", desc.name);
+    }
 
     if (desc.type_conformances.size() == 0) {
-
         // Simple case with no type conformances simply finds the entry point from its module.
-        Slang::ComPtr<slang::IEntryPoint> slang_entry_point;
-        SGL_CATCH_INTERNAL_SLANG_ERROR(
-            slang_module->findEntryPointByName(desc.name.c_str(), slang_entry_point.writeRef());
-        );
-        if (!slang_entry_point)
-            SGL_THROW("Entry point \"{}\" not found", desc.name);
         data->slang_entry_point = std::move(slang_entry_point);
-
     } else {
-
-        // Find the input entry point
-        Slang::ComPtr<slang::IEntryPoint> slang_entry_point;
-        SGL_CATCH_INTERNAL_SLANG_ERROR(
-            slang_module->findEntryPointByName(desc.name.c_str(), slang_entry_point.writeRef());
-        );
-        if (!slang_entry_point)
-            SGL_THROW("Entry point \"{}\" not found", desc.name);
-
         // Validate type conformance entries.
         {
             std::set<std::pair<std::string_view, std::string_view>> type_conformance_set;
@@ -1461,11 +1642,28 @@ void SlangEntryPoint::init(SlangSessionBuild& build_data) const
         data->slang_entry_point = std::move(specialized_entry_point);
     }
 
+    if (desc.export_name) {
+        Slang::ComPtr<slang::IComponentType> renamed_entry_point;
+        SLANG_CALL(
+            data->slang_entry_point->renameEntryPoint(desc.export_name->c_str(), renamed_entry_point.writeRef())
+        );
+        SGL_CHECK(renamed_entry_point, "Failed to rename entry point \"{}\" to \"{}\"", desc.name, *desc.export_name);
+        data->slang_entry_point = std::move(renamed_entry_point);
+    }
+
     // Read name and stage from the entry point.
     slang::EntryPointLayout* layout;
     SGL_CATCH_INTERNAL_SLANG_ERROR(layout = data->slang_entry_point->getLayout()->getEntryPointByIndex(0););
     data->name = layout->getNameOverride() ? layout->getNameOverride() : layout->getName();
     data->stage = static_cast<ShaderStage>(layout->getStage());
+    if (desc.requested_stage && data->stage != *desc.requested_stage) {
+        SGL_THROW(
+            "Entry point \"{}\" resolved as stage {}, but stage {} was requested",
+            desc.name,
+            data->stage,
+            *desc.requested_stage
+        );
+    }
 
     // Output the built entry point.
     build_data.entry_points[this] = data;
@@ -1494,11 +1692,8 @@ SlangSessionBuild SlangEntryPoint::create_build_context() const
 
 ref<SlangEntryPoint> SlangEntryPoint::rename(const std::string& new_name)
 {
-    Slang::ComPtr<slang::IComponentType> renamed_entry_point;
-    SLANG_CALL(m_data->slang_entry_point->renameEntryPoint(new_name.c_str(), renamed_entry_point.writeRef()));
-
     SlangEntryPointDesc desc = m_desc;
-    desc.name = new_name;
+    desc.export_name = new_name;
     auto ep = make_ref<SlangEntryPoint>(m_module, desc);
 
     auto build_data = create_build_context();
@@ -1510,11 +1705,8 @@ ref<SlangEntryPoint> SlangEntryPoint::rename(const std::string& new_name)
 
 ref<SlangEntryPoint> SlangEntryPoint::with_name(const std::string& name) const
 {
-    Slang::ComPtr<slang::IComponentType> new_entry_point;
-    SLANG_CALL(m_data->slang_entry_point->renameEntryPoint(name.c_str(), new_entry_point.writeRef()));
-
     SlangEntryPointDesc desc = m_desc;
-    desc.name = name;
+    desc.export_name = name;
     auto ep = make_ref<SlangEntryPoint>(m_module, desc);
 
     auto build_data = create_build_context();

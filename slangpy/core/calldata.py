@@ -486,9 +486,13 @@ class CallData(NativeCallData):
             print("=" * 80)
             print()
 
-        # Hash the code to get a unique identifier for the module.
-        # We add type conformances to the start of the code to ensure that the hash is unique
+        # Hash the code to get a unique identifier for the module and pipeline configuration.
+        # Ray-tracing pipeline and shader-table settings do not appear in the generated raygen
+        # source, so they must be part of the cache identity explicitly.
         code_minus_header = str(build_info.type_conformances) + code[len(codegen.header) :]
+        if build_info.pipeline_type == PipelineType.ray_tracing:
+            code_minus_header += "\nslangpy-ray-tracing-signature:\n"
+            code_minus_header += build_info.ray_tracing_signature
         hash = hashlib.sha256(code_minus_header.encode()).hexdigest()
 
         # Check if we've already built this module.
@@ -530,34 +534,46 @@ class CallData(NativeCallData):
             elif build_info.pipeline_type == PipelineType.ray_tracing:
                 # Create ray tracing pipeline
                 eps = [module.entry_point(f"raygen_main", type_conformances)]
-                # Collect hit group names. Either use the provided list, or construct hit group descriptions.
-                hit_group_names = build_info.ray_tracing_hit_group_names or [
-                    hit_group.hit_group_name for hit_group in build_info.ray_tracing_hit_groups
-                ]
-                # Collect entry point names for all hit groups, miss shaders and callable shaders.
-                # dict preserves insertion order; value is unused.
-                entry_point_names: dict[str, None] = {}
-                for hit_group in build_info.ray_tracing_hit_groups:
-                    if hit_group.closest_hit_entry_point:
-                        entry_point_names[hit_group.closest_hit_entry_point] = None
-                    if hit_group.any_hit_entry_point:
-                        entry_point_names[hit_group.any_hit_entry_point] = None
-                    if (
-                        hit_group.intersection_entry_point
-                        and hit_group.intersection_entry_point
-                        not in _OPTIX_BUILTIN_INTERSECTION_SHADERS
-                    ):
-                        entry_point_names[hit_group.intersection_entry_point] = None
-                entry_point_names.update(
-                    (name, None) for name in build_info.ray_tracing_miss_entry_points if name
-                )
-                entry_point_names.update(
-                    (name, None) for name in build_info.ray_tracing_callable_entry_points if name
-                )
-                # Add entry points for every user-defined entry point in the hit groups, miss shaders, and callable shaders.
-                eps.extend(
-                    build_info.module.device_module.entry_point(name) for name in entry_point_names
-                )
+                if build_info.ray_tracing_trace_program_layout is not None:
+                    structural_bindings = (
+                        build_info.module.device_module.structural_ray_tracing_bindings(
+                            build_info.ray_tracing_trace_program_layout
+                        )
+                    )
+                    eps.extend(structural_bindings.entry_points)
+                    hit_groups = structural_bindings.hit_groups
+                    miss_entry_points = structural_bindings.miss_entry_points
+                    hit_group_names = structural_bindings.hit_group_names
+                    callable_entry_points = structural_bindings.callable_entry_points
+                else:
+                    hit_groups = build_info.ray_tracing_hit_groups
+                    miss_entry_points = build_info.ray_tracing_miss_entry_points
+                    callable_entry_points = build_info.ray_tracing_callable_entry_points
+                    # Collect hit group names. Either use the provided list, or construct hit group descriptions.
+                    hit_group_names = build_info.ray_tracing_hit_group_names or [
+                        hit_group.hit_group_name for hit_group in hit_groups
+                    ]
+                    # Collect entry point names for all hit groups, miss shaders and callable shaders.
+                    # dict preserves insertion order; value is unused.
+                    entry_point_names: dict[str, None] = {}
+                    for hit_group in hit_groups:
+                        if hit_group.closest_hit_entry_point:
+                            entry_point_names[hit_group.closest_hit_entry_point] = None
+                        if hit_group.any_hit_entry_point:
+                            entry_point_names[hit_group.any_hit_entry_point] = None
+                        if (
+                            hit_group.intersection_entry_point
+                            and hit_group.intersection_entry_point
+                            not in _OPTIX_BUILTIN_INTERSECTION_SHADERS
+                        ):
+                            entry_point_names[hit_group.intersection_entry_point] = None
+                    entry_point_names.update((name, None) for name in miss_entry_points if name)
+                    entry_point_names.update((name, None) for name in callable_entry_points if name)
+                    # Add entry points for every user-defined entry point in the hit groups, miss shaders, and callable shaders.
+                    eps.extend(
+                        build_info.module.device_module.entry_point(name)
+                        for name in entry_point_names
+                    )
 
                 program = session.link_program(
                     [module, build_info.module.device_module],
@@ -566,7 +582,7 @@ class CallData(NativeCallData):
                 )
                 self.pipeline = device.create_ray_tracing_pipeline(
                     program,
-                    hit_groups=build_info.ray_tracing_hit_groups,
+                    hit_groups=hit_groups,
                     max_recursion=build_info.ray_tracing_max_recursion,
                     max_ray_payload_size=build_info.ray_tracing_max_ray_payload_size,
                     max_attribute_size=build_info.ray_tracing_max_attribute_size,
@@ -578,9 +594,9 @@ class CallData(NativeCallData):
                 self.shader_table = device.create_shader_table(
                     program,
                     ray_gen_entry_points=["raygen_main"],
-                    miss_entry_points=build_info.ray_tracing_miss_entry_points,
+                    miss_entry_points=miss_entry_points,
                     hit_group_names=hit_group_names,
-                    callable_entry_points=build_info.ray_tracing_callable_entry_points,
+                    callable_entry_points=callable_entry_points,
                 )
                 build_info.module.shader_table_cache[hash] = self.shader_table
             else:

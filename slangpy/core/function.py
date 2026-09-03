@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 import hashlib
+import json
 from typing import TYPE_CHECKING, Any, Callable, Optional, Protocol, Union, cast, Sequence
 from enum import Enum
 
@@ -47,6 +48,41 @@ class PipelineType(Enum):
     ray_tracing = 1
 
 
+def _make_ray_tracing_signature(
+    trace_program_layout: Optional[str],
+    hit_groups: Sequence[HitGroupDesc],
+    miss_entry_points: Sequence[str],
+    hit_group_names: Optional[Sequence[str]],
+    callable_entry_points: Sequence[str],
+    max_recursion: int,
+    max_ray_payload_size: int,
+    max_attribute_size: int,
+    flags: RayTracingPipelineFlags,
+) -> str:
+    """Return a stable signature for every ray-tracing pipeline configuration field."""
+    configuration = {
+        "mode": "structural" if trace_program_layout is not None else "legacy",
+        "trace_program_layout": trace_program_layout,
+        "hit_groups": [
+            {
+                "hit_group_name": hit_group.hit_group_name,
+                "closest_hit_entry_point": hit_group.closest_hit_entry_point,
+                "any_hit_entry_point": hit_group.any_hit_entry_point,
+                "intersection_entry_point": hit_group.intersection_entry_point,
+            }
+            for hit_group in hit_groups
+        ],
+        "miss_entry_points": list(miss_entry_points),
+        "hit_group_names": list(hit_group_names) if hit_group_names is not None else None,
+        "callable_entry_points": list(callable_entry_points),
+        "max_recursion": max_recursion,
+        "max_ray_payload_size": max_ray_payload_size,
+        "max_attribute_size": max_attribute_size,
+        "flags": int(flags),
+    }
+    return "ray_tracing:" + json.dumps(configuration, sort_keys=True, separators=(",", ":"))
+
+
 class FunctionBuildInfo:
     def __init__(self) -> None:
         super().__init__()
@@ -74,10 +110,12 @@ class FunctionBuildInfo:
         self.ray_tracing_miss_entry_points: list[str] = []
         self.ray_tracing_hit_group_names: Optional[list[str]] = None
         self.ray_tracing_callable_entry_points: list[str] = []
+        self.ray_tracing_trace_program_layout: Optional[str] = None
         self.ray_tracing_max_recursion: int = 0
         self.ray_tracing_max_ray_payload_size: int = 0
         self.ray_tracing_max_attribute_size: int = 8
         self.ray_tracing_flags: RayTracingPipelineFlags = RayTracingPipelineFlags.none
+        self.ray_tracing_signature: str = ""
 
 
 class FunctionNode(NativeFunctionNode):
@@ -189,17 +227,22 @@ class FunctionNode(NativeFunctionNode):
 
     def ray_tracing(
         self,
-        hit_groups: Sequence["HitGroupDescParam"],
-        miss_entry_points: Sequence[str] = [],
+        hit_groups: Optional[Sequence["HitGroupDescParam"]] = None,
+        miss_entry_points: Optional[Sequence[str]] = None,
         hit_group_names: Optional[Sequence[str]] = None,
-        callable_entry_points: Sequence[str] = [],
+        callable_entry_points: Optional[Sequence[str]] = None,
         max_recursion: int = 1,
         max_ray_payload_size: int = 32,
         max_attribute_size: int = 8,
         flags: RayTracingPipelineFlags = RayTracingPipelineFlags.none,
-    ):
+        *,
+        trace_program_layout: Optional[str] = None,
+    ) -> "FunctionNodeRayTracing":
         """
-        Specify the ray tracing pipeline configuration.
+        Specify either a legacy or structural ray tracing pipeline configuration.
+
+        ``trace_program_layout`` selects a structural ray tracing layout and cannot be combined
+        with the legacy hit-group, miss, hit-group-name, or callable configuration arguments.
         """
         return FunctionNodeRayTracing(
             self,
@@ -211,6 +254,7 @@ class FunctionNode(NativeFunctionNode):
             max_ray_payload_size,
             max_attribute_size,
             flags,
+            trace_program_layout,
         )
 
     @property
@@ -485,30 +529,86 @@ class FunctionNodeRayTracing(FunctionNode):
     def __init__(
         self,
         parent: NativeFunctionNode,
-        hit_groups: Sequence["HitGroupDescParam"],
-        miss_entry_points: Sequence[str],
+        hit_groups: Optional[Sequence["HitGroupDescParam"]],
+        miss_entry_points: Optional[Sequence[str]],
         hit_group_names: Optional[Sequence[str]],
-        callable_entry_points: Sequence[str],
+        callable_entry_points: Optional[Sequence[str]],
         max_recursion: int,
         max_ray_payload_size: int,
         max_attribute_size: int,
         flags: RayTracingPipelineFlags,
-    ):
+        trace_program_layout: Optional[str] = None,
+    ) -> None:
+        if trace_program_layout is not None:
+            legacy_options = {
+                "hit_groups": hit_groups,
+                "miss_entry_points": miss_entry_points,
+                "hit_group_names": hit_group_names,
+                "callable_entry_points": callable_entry_points,
+            }
+            conflicts = [name for name, value in legacy_options.items() if value is not None]
+            if conflicts:
+                raise ValueError(
+                    "trace_program_layout cannot be combined with legacy ray tracing options: "
+                    + ", ".join(conflicts)
+                )
+            if not trace_program_layout:
+                raise ValueError("trace_program_layout must be a non-empty string")
+        elif hit_groups is None:
+            raise ValueError(
+                "hit_groups must be specified when trace_program_layout is not provided"
+            )
+
+        normalized_hit_groups = [
+            (
+                HitGroupDesc(
+                    hit_group.hit_group_name,
+                    hit_group.closest_hit_entry_point,
+                    hit_group.any_hit_entry_point,
+                    hit_group.intersection_entry_point,
+                )
+                if isinstance(hit_group, HitGroupDesc)
+                else HitGroupDesc(hit_group)
+            )
+            for hit_group in (hit_groups if hit_groups is not None else ())
+        ]
+        normalized_miss_entry_points = list(
+            miss_entry_points if miss_entry_points is not None else ()
+        )
+        normalized_hit_group_names = list(hit_group_names) if hit_group_names is not None else None
+        normalized_callable_entry_points = list(
+            callable_entry_points if callable_entry_points is not None else ()
+        )
+        ray_tracing_signature = _make_ray_tracing_signature(
+            trace_program_layout,
+            normalized_hit_groups,
+            normalized_miss_entry_points,
+            normalized_hit_group_names,
+            normalized_callable_entry_points,
+            max_recursion,
+            max_ray_payload_size,
+            max_attribute_size,
+            flags,
+        )
+
         super().__init__(
             parent,
             FunctionNodeType.ray_tracing,
             {
-                "hit_groups": [hit_group if isinstance(hit_group, HitGroupDesc) else HitGroupDesc(hit_group) for hit_group in hit_groups],  # type: ignore
-                "miss_entry_points": list(miss_entry_points),
-                "hit_group_names": list(hit_group_names) if hit_group_names is not None else None,
-                "callable_entry_points": list(callable_entry_points),
+                "hit_groups": normalized_hit_groups,
+                "miss_entry_points": normalized_miss_entry_points,
+                "hit_group_names": normalized_hit_group_names,
+                "callable_entry_points": normalized_callable_entry_points,
+                "trace_program_layout": trace_program_layout,
                 "max_recursion": max_recursion,
                 "max_ray_payload_size": max_ray_payload_size,
                 "max_attribute_size": max_attribute_size,
                 "flags": flags,
+                "signature": ray_tracing_signature,
             },
         )
-        self.slangpy_signature = f"({hit_groups}, {miss_entry_points}, {callable_entry_points}, {max_recursion}, {max_ray_payload_size}, {max_attribute_size}, {flags})"
+        self.ray_tracing_signature = ray_tracing_signature
+        self.slangpy_signature = ray_tracing_signature
 
     def _populate_build_info(self, info: FunctionBuildInfo):
         d = cast(dict[str, Any], self._native_data)
@@ -517,10 +617,12 @@ class FunctionNodeRayTracing(FunctionNode):
         info.ray_tracing_miss_entry_points = d["miss_entry_points"]
         info.ray_tracing_hit_group_names = d["hit_group_names"]
         info.ray_tracing_callable_entry_points = d["callable_entry_points"]
+        info.ray_tracing_trace_program_layout = d["trace_program_layout"]
         info.ray_tracing_max_recursion = d["max_recursion"]
         info.ray_tracing_max_ray_payload_size = d["max_ray_payload_size"]
         info.ray_tracing_max_attribute_size = d["max_attribute_size"]
         info.ray_tracing_flags = d["flags"]
+        info.ray_tracing_signature = d["signature"]
 
 
 class FunctionNodeBwds(FunctionNode):

@@ -268,8 +268,53 @@ SGL_PY_EXPORT(device_reflection)
         )
         .def("get_type_layout", &ProgramLayout::get_type_layout, "type"_a, D(ProgramLayout, get_type_layout))
         .def("is_sub_type", &ProgramLayout::is_sub_type, "sub_type"_a, "super_type"_a, D(ProgramLayout, is_sub_type))
+        .def("find_trace_program_layout", &ProgramLayout::find_trace_program_layout, "name"_a)
         .def_prop_ro("hashed_strings", &ProgramLayout::hashed_strings, D(ProgramLayout, hashed_strings))
         .def("__repr__", &ProgramLayout::to_string);
+
+    nb::class_<TraceProgramStageInfo>(m, "TraceProgramStageInfo")
+        .def_ro("stage", &TraceProgramStageInfo::stage)
+        .def_ro("type", &TraceProgramStageInfo::type)
+        .def_ro("type_name", &TraceProgramStageInfo::type_name)
+        .def_ro("entry_point_name", &TraceProgramStageInfo::entry_point_name);
+
+    nb::class_<TraceProgramHitGroupInfo>(m, "TraceProgramHitGroupInfo")
+        .def_ro("slot", &TraceProgramHitGroupInfo::slot)
+        .def_ro("type", &TraceProgramHitGroupInfo::type)
+        .def_ro("type_name", &TraceProgramHitGroupInfo::type_name)
+        .def_ro("context_type", &TraceProgramHitGroupInfo::context_type)
+        .def_ro("record_type", &TraceProgramHitGroupInfo::record_type)
+        .def_ro("primitive_type", &TraceProgramHitGroupInfo::primitive_type)
+        .def_ro("intersection_attributes_type", &TraceProgramHitGroupInfo::intersection_attributes_type)
+        .def_ro("closest_hit", &TraceProgramHitGroupInfo::closest_hit)
+        .def_ro("any_hit", &TraceProgramHitGroupInfo::any_hit)
+        .def_ro("intersection", &TraceProgramHitGroupInfo::intersection);
+
+    nb::class_<TraceProgramMissGroupInfo>(m, "TraceProgramMissGroupInfo")
+        .def_ro("slot", &TraceProgramMissGroupInfo::slot)
+        .def_ro("type", &TraceProgramMissGroupInfo::type)
+        .def_ro("type_name", &TraceProgramMissGroupInfo::type_name)
+        .def_ro("context_type", &TraceProgramMissGroupInfo::context_type)
+        .def_ro("record_type", &TraceProgramMissGroupInfo::record_type)
+        .def_ro("miss", &TraceProgramMissGroupInfo::miss);
+
+    nb::class_<TraceProgramCallableGroupInfo>(m, "TraceProgramCallableGroupInfo")
+        .def_ro("slot", &TraceProgramCallableGroupInfo::slot)
+        .def_ro("type", &TraceProgramCallableGroupInfo::type)
+        .def_ro("type_name", &TraceProgramCallableGroupInfo::type_name)
+        .def_ro("context_type", &TraceProgramCallableGroupInfo::context_type)
+        .def_ro("record_type", &TraceProgramCallableGroupInfo::record_type)
+        .def_ro("data_type", &TraceProgramCallableGroupInfo::data_type)
+        .def_ro("callable", &TraceProgramCallableGroupInfo::callable);
+
+    nb::class_<TraceProgramLayoutInfo, Object>(m, "TraceProgramLayoutInfo")
+        .def_prop_ro("is_valid", &TraceProgramLayoutInfo::is_valid)
+        .def_ro("type", &TraceProgramLayoutInfo::type)
+        .def_ro("type_name", &TraceProgramLayoutInfo::type_name)
+        .def_ro("trace_context_type", &TraceProgramLayoutInfo::trace_context_type)
+        .def_ro("hit_groups", &TraceProgramLayoutInfo::hit_groups)
+        .def_ro("miss_groups", &TraceProgramLayoutInfo::miss_groups)
+        .def_ro("callable_groups", &TraceProgramLayoutInfo::callable_groups);
 
     nb::class_<ReflectionCursor>(m, "ReflectionCursor", D(ReflectionCursor))
         .def(nb::init<const ShaderProgram*>(), "shader_program"_a)

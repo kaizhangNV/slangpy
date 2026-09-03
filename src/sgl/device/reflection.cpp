@@ -403,6 +403,91 @@ ProgramLayoutEntryPointList ProgramLayout::entry_points() const
     return ProgramLayoutEntryPointList(ref(this));
 }
 
+ref<const TraceProgramLayoutInfo> ProgramLayout::find_trace_program_layout(std::string_view name) const
+{
+    std::string name_string(name);
+    slang::TraceProgramLayoutReflection* slang_layout = slang_target()->findTraceProgramLayout(name_string.c_str());
+    if (!slang_layout)
+        return nullptr;
+
+    auto result = make_ref<TraceProgramLayoutInfo>();
+    result->source_layout = ref(this);
+
+    auto wrap_type = [this](slang::TypeReflection* type)
+    {
+        return detail::from_slang(m_owner, type);
+    };
+    auto type_name = [](const ref<const TypeReflection>& type)
+    {
+        return type ? type->full_name() : std::string();
+    };
+    auto copy_stage = [&](slang::RayTracingStageReflection* stage) -> std::optional<TraceProgramStageInfo>
+    {
+        if (!stage)
+            return std::nullopt;
+        TraceProgramStageInfo info;
+        info.stage = static_cast<ShaderStage>(stage->getStage());
+        info.type = wrap_type(stage->getType());
+        info.type_name = type_name(info.type);
+        if (const char* entry_point_name = stage->getEntryPointName())
+            info.entry_point_name = entry_point_name;
+        return info;
+    };
+
+    result->type = wrap_type(slang_layout->getType());
+    result->type_name = type_name(result->type);
+    result->trace_context_type = wrap_type(slang_layout->getTraceContextType());
+
+    result->hit_groups.reserve(narrow_cast<size_t>(slang_layout->getHitGroupCount()));
+    for (SlangUInt index = 0; index < slang_layout->getHitGroupCount(); ++index) {
+        slang::RayTracingHitGroupReflection* group = slang_layout->getHitGroup(index);
+        SGL_CHECK(group, "Structural ray-tracing hit group {} has no reflection data", index);
+        TraceProgramHitGroupInfo info;
+        info.slot = narrow_cast<int64_t>(group->getSlot());
+        info.type = wrap_type(group->getType());
+        info.type_name = type_name(info.type);
+        info.context_type = wrap_type(group->getContextType());
+        info.record_type = wrap_type(group->getRecordType());
+        info.primitive_type = wrap_type(group->getPrimitiveType());
+        info.intersection_attributes_type = wrap_type(group->getIntersectionAttributesType());
+        info.closest_hit = copy_stage(group->getClosestHit());
+        info.any_hit = copy_stage(group->getAnyHit());
+        info.intersection = copy_stage(group->getIntersection());
+        result->hit_groups.push_back(std::move(info));
+    }
+
+    result->miss_groups.reserve(narrow_cast<size_t>(slang_layout->getMissGroupCount()));
+    for (SlangUInt index = 0; index < slang_layout->getMissGroupCount(); ++index) {
+        slang::RayTracingMissGroupReflection* group = slang_layout->getMissGroup(index);
+        SGL_CHECK(group, "Structural ray-tracing miss group {} has no reflection data", index);
+        TraceProgramMissGroupInfo info;
+        info.slot = narrow_cast<int64_t>(group->getSlot());
+        info.type = wrap_type(group->getType());
+        info.type_name = type_name(info.type);
+        info.context_type = wrap_type(group->getContextType());
+        info.record_type = wrap_type(group->getRecordType());
+        info.miss = copy_stage(group->getMiss());
+        result->miss_groups.push_back(std::move(info));
+    }
+
+    result->callable_groups.reserve(narrow_cast<size_t>(slang_layout->getCallableGroupCount()));
+    for (SlangUInt index = 0; index < slang_layout->getCallableGroupCount(); ++index) {
+        slang::RayTracingCallableGroupReflection* group = slang_layout->getCallableGroup(index);
+        SGL_CHECK(group, "Structural ray-tracing callable group {} has no reflection data", index);
+        TraceProgramCallableGroupInfo info;
+        info.slot = narrow_cast<int64_t>(group->getSlot());
+        info.type = wrap_type(group->getType());
+        info.type_name = type_name(info.type);
+        info.context_type = wrap_type(group->getContextType());
+        info.record_type = wrap_type(group->getRecordType());
+        info.data_type = wrap_type(group->getDataType());
+        info.callable = copy_stage(group->getCallable());
+        result->callable_groups.push_back(std::move(info));
+    }
+
+    return result;
+}
+
 std::string ProgramLayout::to_string() const
 {
     return fmt::format(

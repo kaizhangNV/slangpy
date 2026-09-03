@@ -15,6 +15,7 @@
 #include <slang.h>
 
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -1143,6 +1144,10 @@ public:
 
     ProgramLayoutEntryPointList entry_points() const;
 
+    /// Find and snapshot a structural ray-tracing program layout by type name.
+    /// The returned value owns all scalar/string metadata and uses lifetime-safe SGL wrappers for types.
+    ref<const TraceProgramLayoutInfo> find_trace_program_layout(std::string_view name) const;
+
     /// Find a given type by name. Handles generic specilization if generic
     /// variable values are provided.
     ref<const TypeReflection> find_type_by_name(const char* name) const
@@ -1260,6 +1265,65 @@ protected:
     {
         return m_owner->get_entry_point_by_index(index);
     }
+};
+
+/// Value representation of one synthesized structural ray-tracing stage.
+struct SGL_API TraceProgramStageInfo {
+    ShaderStage stage{ShaderStage::none};
+    ref<const TypeReflection> type;
+    std::string type_name;
+    std::string entry_point_name;
+};
+
+/// Value representation of one structural hit group.
+struct SGL_API TraceProgramHitGroupInfo {
+    int64_t slot{0};
+    ref<const TypeReflection> type;
+    std::string type_name;
+    ref<const TypeReflection> context_type;
+    ref<const TypeReflection> record_type;
+    ref<const TypeReflection> primitive_type;
+    ref<const TypeReflection> intersection_attributes_type;
+    std::optional<TraceProgramStageInfo> closest_hit;
+    std::optional<TraceProgramStageInfo> any_hit;
+    std::optional<TraceProgramStageInfo> intersection;
+};
+
+/// Value representation of one structural miss group.
+struct SGL_API TraceProgramMissGroupInfo {
+    int64_t slot{0};
+    ref<const TypeReflection> type;
+    std::string type_name;
+    ref<const TypeReflection> context_type;
+    ref<const TypeReflection> record_type;
+    std::optional<TraceProgramStageInfo> miss;
+};
+
+/// Value representation of one structural callable group.
+struct SGL_API TraceProgramCallableGroupInfo {
+    int64_t slot{0};
+    ref<const TypeReflection> type;
+    std::string type_name;
+    ref<const TypeReflection> context_type;
+    ref<const TypeReflection> record_type;
+    ref<const TypeReflection> data_type;
+    std::optional<TraceProgramStageInfo> callable;
+};
+
+/// Lifetime-safe value snapshot of a structural ray-tracing program layout.
+/// Raw structural reflection handles are owned by Slang's ProgramLayout and are never retained here.
+class SGL_API TraceProgramLayoutInfo : public Object {
+    SGL_OBJECT(TraceProgramLayoutInfo)
+public:
+    bool is_valid() const { return source_layout && source_layout->is_valid(); }
+
+    ref<const ProgramLayout> source_layout;
+    ref<const TypeReflection> type;
+    std::string type_name;
+    ref<const TypeReflection> trace_context_type;
+    std::vector<TraceProgramHitGroupInfo> hit_groups;
+    std::vector<TraceProgramMissGroupInfo> miss_groups;
+    std::vector<TraceProgramCallableGroupInfo> callable_groups;
 };
 
 

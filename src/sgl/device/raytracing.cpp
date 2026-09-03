@@ -4,6 +4,7 @@
 
 #include "sgl/device/device.h"
 #include "sgl/device/helpers.h"
+#include "sgl/device/reflection.h"
 #include "sgl/device/shader.h"
 #include "sgl/device/shader_cursor.h"
 
@@ -12,6 +13,10 @@
 #include "sgl/core/short_vector.h"
 
 #include <slang-rhi/acceleration-structure-utils.h>
+
+#include <algorithm>
+#include <map>
+#include <set>
 
 namespace sgl {
 
@@ -242,6 +247,276 @@ std::string AccelerationStructureInstanceList::to_string() const
         m_device,
         m_instances.size()
     );
+}
+
+namespace {
+
+    constexpr uint32_t k_max_dense_shader_table_entries = 1u << 20;
+
+    template<typename GroupInfo>
+    uint32_t
+    validate_group_slots(const std::vector<GroupInfo>& groups, uint32_t minimum_count, std::string_view group_kind)
+    {
+        SGL_CHECK(
+            minimum_count <= k_max_dense_shader_table_entries,
+            "Requested minimum {} shader-table count {} exceeds the safety limit {}",
+            group_kind,
+            minimum_count,
+            k_max_dense_shader_table_entries
+        );
+
+        uint64_t dense_count = minimum_count;
+        std::set<uint32_t> slots;
+        for (const auto& group : groups) {
+            SGL_CHECK(
+                group.slot >= 0,
+                "Structural ray-tracing {} group \"{}\" has negative slot {}",
+                group_kind,
+                group.type_name,
+                group.slot
+            );
+
+            uint64_t slot = static_cast<uint64_t>(group.slot);
+            SGL_CHECK(
+                slot < k_max_dense_shader_table_entries,
+                "Structural ray-tracing {} group \"{}\" slot {} exceeds the safety limit {}",
+                group_kind,
+                group.type_name,
+                slot,
+                k_max_dense_shader_table_entries - 1
+            );
+            SGL_CHECK(
+                slots.insert(static_cast<uint32_t>(slot)).second,
+                "Structural ray-tracing {} slot {} is declared more than once",
+                group_kind,
+                slot
+            );
+            dense_count = std::max(dense_count, slot + 1);
+        }
+        return narrow_cast<uint32_t>(dense_count);
+    }
+
+    void validate_empty_record(
+        const ref<const TypeReflection>& record_type,
+        std::string_view group_kind,
+        std::string_view group_name,
+        int64_t slot
+    )
+    {
+        SGL_CHECK(
+            record_type,
+            "Structural ray-tracing {} group \"{}\" at slot {} has no reflected record type",
+            group_kind,
+            group_name,
+            slot
+        );
+
+        bool is_void = record_type->kind() == TypeReflection::Kind::scalar
+            && record_type->scalar_type() == TypeReflection::ScalarType::void_;
+        bool is_empty_struct = record_type->kind() == TypeReflection::Kind::struct_ && record_type->field_count() == 0;
+        SGL_CHECK(
+            is_void || is_empty_struct,
+            "Structural ray-tracing {} group \"{}\" at slot {} uses non-empty shader record type \"{}\". "
+            "Phase 1 supports only void or empty records because SGL does not yet expose shader-record overwrites.",
+            group_kind,
+            group_name,
+            slot,
+            record_type->full_name()
+        );
+    }
+
+} // namespace
+
+StructuralRayTracingBindings create_structural_ray_tracing_bindings(
+    const SlangModule* module,
+    const TraceProgramLayoutInfo* layout,
+    const StructuralRayTracingBindingOptions& options
+)
+{
+    SGL_CHECK(module, "Structural ray-tracing binding creation requires a Slang module");
+    SGL_CHECK(layout, "Structural ray-tracing binding creation requires a reflected trace-program layout");
+    SGL_CHECK(
+        layout->is_valid(),
+        "Structural ray-tracing program layout \"{}\" has been invalidated",
+        layout->type_name
+    );
+    SGL_CHECK(
+        layout->source_layout->owner() == module,
+        "Structural ray-tracing program layout \"{}\" does not belong to module \"{}\"",
+        layout->type_name,
+        module->name()
+    );
+
+    uint32_t hit_group_count = validate_group_slots(layout->hit_groups, options.min_hit_group_count, "hit");
+    uint32_t miss_group_count = validate_group_slots(layout->miss_groups, options.min_miss_count, "miss");
+    uint32_t callable_group_count
+        = validate_group_slots(layout->callable_groups, options.min_callable_count, "callable");
+
+    for (const auto& group : layout->hit_groups)
+        validate_empty_record(group.record_type, "hit", group.type_name, group.slot);
+    for (const auto& group : layout->miss_groups)
+        validate_empty_record(group.record_type, "miss", group.type_name, group.slot);
+    for (const auto& group : layout->callable_groups)
+        validate_empty_record(group.record_type, "callable", group.type_name, group.slot);
+
+    StructuralRayTracingBindings result;
+    result.hit_group_names.resize(hit_group_count);
+    result.miss_entry_points.resize(miss_group_count);
+    result.callable_entry_points.resize(callable_group_count);
+
+    // slang-rhi resolves entry points and hit groups through one name map. Reserve every reflected
+    // stage export before generating hit-group names so a legal user stage such as
+    // `__sgl_structural_hit_group_0` cannot alias the group occupying slot zero. `raygen_main` is
+    // also reserved for SlangPy's generated ray-generation entry point.
+    std::set<std::string> used_pipeline_names{"raygen_main"};
+    auto reserve_stage_name = [&](const std::optional<TraceProgramStageInfo>& stage)
+    {
+        if (stage && !stage->entry_point_name.empty())
+            used_pipeline_names.insert(stage->entry_point_name);
+    };
+    for (const auto& group : layout->hit_groups) {
+        reserve_stage_name(group.closest_hit);
+        reserve_stage_name(group.any_hit);
+        reserve_stage_name(group.intersection);
+    }
+    for (const auto& group : layout->miss_groups)
+        reserve_stage_name(group.miss);
+    for (const auto& group : layout->callable_groups)
+        reserve_stage_name(group.callable);
+
+    std::map<std::pair<std::string, ShaderStage>, ref<SlangEntryPoint>> resolved_entry_points;
+    auto resolve_stage = [&](const TraceProgramStageInfo& stage, ShaderStage expected_stage) -> std::string
+    {
+        SGL_CHECK(
+            stage.stage == expected_stage,
+            "Structural ray-tracing stage type \"{}\" reflects stage {}, but {} was expected",
+            stage.type_name,
+            stage.stage,
+            expected_stage
+        );
+        SGL_CHECK(
+            !stage.type_name.empty(),
+            "Structural ray-tracing stage has no reflected type name for checked materialization"
+        );
+        SGL_CHECK(
+            !stage.entry_point_name.empty(),
+            "Structural ray-tracing stage type \"{}\" has no reflected native entry-point name",
+            stage.type_name
+        );
+
+        // Checked materialization needs the fully qualified reflected type identity; the reflected
+        // public entry-point name below is the target-facing export identity.
+        auto key = std::make_pair(stage.type_name, stage.stage);
+        auto iterator = resolved_entry_points.find(key);
+        if (iterator == resolved_entry_points.end()) {
+            ref<SlangEntryPoint> entry_point = module->checked_entry_point(stage.type_name, stage.stage);
+            // Slang reflection supplies the deterministic public name used when the same stage is
+            // synthesized from a trace operation. Apply it to the separately materialized stage so
+            // per-entry-point target compilation and shader-table lookup use the same identity.
+            entry_point = entry_point->with_name(stage.entry_point_name);
+            iterator = resolved_entry_points.emplace(std::move(key), entry_point).first;
+            result.entry_points.push_back(std::move(entry_point));
+        }
+        return iterator->second->name();
+    };
+
+    std::vector<const TraceProgramHitGroupInfo*> sorted_hit_groups;
+    sorted_hit_groups.reserve(layout->hit_groups.size());
+    for (const auto& group : layout->hit_groups)
+        sorted_hit_groups.push_back(&group);
+    std::sort(
+        sorted_hit_groups.begin(),
+        sorted_hit_groups.end(),
+        [](const auto* left, const auto* right)
+        {
+            return left->slot < right->slot;
+        }
+    );
+
+    result.hit_groups.reserve(sorted_hit_groups.size());
+    for (const TraceProgramHitGroupInfo* group : sorted_hit_groups) {
+        std::string hit_group_name_base = fmt::format("__sgl_structural_hit_group_{}", group->slot);
+        std::string hit_group_name = hit_group_name_base;
+        uint32_t collision_index = 0;
+        while (!used_pipeline_names.insert(hit_group_name).second) {
+            ++collision_index;
+            hit_group_name = fmt::format("{}_{}", hit_group_name_base, collision_index);
+        }
+        HitGroupDesc desc;
+        desc.hit_group_name = hit_group_name;
+        if (group->closest_hit)
+            desc.closest_hit_entry_point = resolve_stage(*group->closest_hit, ShaderStage::closest_hit);
+        if (group->any_hit)
+            desc.any_hit_entry_point = resolve_stage(*group->any_hit, ShaderStage::any_hit);
+        if (group->intersection)
+            desc.intersection_entry_point = resolve_stage(*group->intersection, ShaderStage::intersection);
+        result.hit_group_names[narrow_cast<size_t>(group->slot)] = std::move(hit_group_name);
+        result.hit_groups.push_back(std::move(desc));
+    }
+
+    std::vector<const TraceProgramMissGroupInfo*> sorted_miss_groups;
+    sorted_miss_groups.reserve(layout->miss_groups.size());
+    for (const auto& group : layout->miss_groups)
+        sorted_miss_groups.push_back(&group);
+    std::sort(
+        sorted_miss_groups.begin(),
+        sorted_miss_groups.end(),
+        [](const auto* left, const auto* right)
+        {
+            return left->slot < right->slot;
+        }
+    );
+    for (const TraceProgramMissGroupInfo* group : sorted_miss_groups) {
+        SGL_CHECK(
+            group->miss.has_value(),
+            "Structural ray-tracing miss group \"{}\" at slot {} has no miss stage",
+            group->type_name,
+            group->slot
+        );
+        result.miss_entry_points[narrow_cast<size_t>(group->slot)] = resolve_stage(*group->miss, ShaderStage::miss);
+    }
+
+    std::vector<const TraceProgramCallableGroupInfo*> sorted_callable_groups;
+    sorted_callable_groups.reserve(layout->callable_groups.size());
+    for (const auto& group : layout->callable_groups)
+        sorted_callable_groups.push_back(&group);
+    std::sort(
+        sorted_callable_groups.begin(),
+        sorted_callable_groups.end(),
+        [](const auto* left, const auto* right)
+        {
+            return left->slot < right->slot;
+        }
+    );
+    for (const TraceProgramCallableGroupInfo* group : sorted_callable_groups) {
+        SGL_CHECK(
+            group->callable.has_value(),
+            "Structural ray-tracing callable group \"{}\" at slot {} has no callable stage",
+            group->type_name,
+            group->slot
+        );
+        result.callable_entry_points[narrow_cast<size_t>(group->slot)]
+            = resolve_stage(*group->callable, ShaderStage::callable);
+    }
+
+    return result;
+}
+
+StructuralRayTracingBindings create_structural_ray_tracing_bindings(
+    const SlangModule* module,
+    std::string_view layout_name,
+    const StructuralRayTracingBindingOptions& options
+)
+{
+    SGL_CHECK(module, "Structural ray-tracing binding creation requires a Slang module");
+    ref<const TraceProgramLayoutInfo> layout = module->layout()->find_trace_program_layout(layout_name);
+    SGL_CHECK(
+        layout,
+        "Structural ray-tracing program layout \"{}\" was not found in module \"{}\"",
+        layout_name,
+        module->name()
+    );
+    return create_structural_ray_tracing_bindings(module, layout.get(), options);
 }
 
 ShaderTable::ShaderTable(ref<Device> device, ShaderTableDesc desc)

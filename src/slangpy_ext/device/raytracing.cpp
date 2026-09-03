@@ -493,5 +493,12 @@ SGL_PY_EXPORT(device_raytracing)
         );
     nb::implicitly_convertible<nb::dict, ShaderTableDesc>();
 
+    nb::class_<StructuralRayTracingBindings>(m, "StructuralRayTracingBindings")
+        .def_ro("entry_points", &StructuralRayTracingBindings::entry_points)
+        .def_ro("hit_groups", &StructuralRayTracingBindings::hit_groups)
+        .def_ro("miss_entry_points", &StructuralRayTracingBindings::miss_entry_points)
+        .def_ro("hit_group_names", &StructuralRayTracingBindings::hit_group_names)
+        .def_ro("callable_entry_points", &StructuralRayTracingBindings::callable_entry_points);
+
     nb::class_<ShaderTable, DeviceChild>(m, "ShaderTable", D(ShaderTable));
 }

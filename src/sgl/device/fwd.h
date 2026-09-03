@@ -81,6 +81,11 @@ class EntryPointLayoutParameterList;
 class ProgramLayout;
 class ProgramLayoutParameterList;
 class ProgramLayoutEntryPointList;
+struct TraceProgramStageInfo;
+struct TraceProgramHitGroupInfo;
+struct TraceProgramMissGroupInfo;
+struct TraceProgramCallableGroupInfo;
+class TraceProgramLayoutInfo;
 
 // refl
 
@@ -121,6 +126,8 @@ class AccelerationStructure;
 class AccelerationStructureInstanceList;
 struct ShaderTableDesc;
 class ShaderTable;
+struct StructuralRayTracingBindingOptions;
+struct StructuralRayTracingBindings;
 
 // command.h
 

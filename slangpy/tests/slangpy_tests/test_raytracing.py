@@ -145,5 +145,55 @@ def test_raytracing(device_type: DeviceType):
     assert np.allclose(data[63, 63, :], [1, 0, 1], atol=0.01)
 
 
+@pytest.mark.parametrize("device_type", helpers.DEFAULT_DEVICE_TYPES)
+def test_structural_raytracing(device_type: DeviceType):
+    device = helpers.get_device(device_type)
+
+    if not device.has_feature(spy.Feature.acceleration_structure):
+        pytest.skip("Acceleration structures not supported on this device")
+    if not device.has_feature(spy.Feature.ray_tracing):
+        pytest.skip("Ray tracing not supported on this device")
+
+    vertices = np.array([-1, -1, 0, 1, -1, 0, -1, 1, 0], dtype=np.float32)
+    indices = np.array([0, 1, 2], dtype=np.uint32)
+    blas = build_blas(device, vertices, indices)
+
+    instance_list = device.create_acceleration_structure_instance_list(1)
+    instance_list.write(
+        0,
+        {
+            "transform": spy.float3x4.identity(),
+            "instance_id": 0,
+            "instance_mask": 0xFF,
+            "instance_contribution_to_hit_group_index": 0,
+            "flags": spy.AccelerationStructureInstanceFlags.none,
+            "acceleration_structure": blas.handle,
+        },
+    )
+    tlas = build_tlas(device, instance_list)
+
+    tensor = Tensor.zeros(device, (64, 64, 3), dtype=float)
+    session = device.create_slang_session(
+        compiler_options={
+            "include_paths": device.slang_session.desc.compiler_options.include_paths,
+            "enable_experimental_features": True,
+        }
+    )
+    module = Module(session.load_module("test_raytracing_structural.slang"))
+
+    module.trace.ray_tracing(
+        trace_program_layout="TestProgramLayout",
+        max_recursion=1,
+        max_ray_payload_size=12,
+    )(tid=spy.call_id(), tlas=tlas, _result=tensor)
+
+    data = tensor.to_numpy()
+
+    assert np.allclose(data[0, 0, :], [0, 0, 0], atol=0.01)
+    assert np.allclose(data[0, 63, :], [1, 0, 0], atol=0.01)
+    assert np.allclose(data[63, 0, :], [0, 1, 0], atol=0.01)
+    assert np.allclose(data[63, 63, :], [1, 0, 1], atol=0.01)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])
