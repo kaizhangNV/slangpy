@@ -58,6 +58,9 @@ def _make_ray_tracing_signature(
     max_ray_payload_size: int,
     max_attribute_size: int,
     flags: RayTracingPipelineFlags,
+    min_hit_group_count: int,
+    min_miss_count: int,
+    min_callable_count: int,
 ) -> str:
     """Return a stable signature for every ray-tracing pipeline configuration field."""
     configuration = {
@@ -79,6 +82,9 @@ def _make_ray_tracing_signature(
         "max_ray_payload_size": max_ray_payload_size,
         "max_attribute_size": max_attribute_size,
         "flags": int(flags),
+        "min_hit_group_count": min_hit_group_count,
+        "min_miss_count": min_miss_count,
+        "min_callable_count": min_callable_count,
     }
     return "ray_tracing:" + json.dumps(configuration, sort_keys=True, separators=(",", ":"))
 
@@ -111,6 +117,9 @@ class FunctionBuildInfo:
         self.ray_tracing_hit_group_names: Optional[list[str]] = None
         self.ray_tracing_callable_entry_points: list[str] = []
         self.ray_tracing_trace_program_layout: Optional[str] = None
+        self.ray_tracing_min_hit_group_count: int = 0
+        self.ray_tracing_min_miss_count: int = 0
+        self.ray_tracing_min_callable_count: int = 0
         self.ray_tracing_max_recursion: int = 0
         self.ray_tracing_max_ray_payload_size: int = 0
         self.ray_tracing_max_attribute_size: int = 8
@@ -237,12 +246,17 @@ class FunctionNode(NativeFunctionNode):
         flags: RayTracingPipelineFlags = RayTracingPipelineFlags.none,
         *,
         trace_program_layout: Optional[str] = None,
+        min_hit_group_count: int = 0,
+        min_miss_count: int = 0,
+        min_callable_count: int = 0,
     ) -> "FunctionNodeRayTracing":
         """
         Specify either a legacy or structural ray tracing pipeline configuration.
 
         ``trace_program_layout`` selects a structural ray tracing layout and cannot be combined
         with the legacy hit-group, miss, hit-group-name, or callable configuration arguments.
+        The structural-only minimum counts retain trailing and sparse physical shader-table slots
+        required by a host acceleration-structure layout.
         """
         return FunctionNodeRayTracing(
             self,
@@ -255,6 +269,9 @@ class FunctionNode(NativeFunctionNode):
             max_attribute_size,
             flags,
             trace_program_layout,
+            min_hit_group_count,
+            min_miss_count,
+            min_callable_count,
         )
 
     @property
@@ -538,7 +555,19 @@ class FunctionNodeRayTracing(FunctionNode):
         max_attribute_size: int,
         flags: RayTracingPipelineFlags,
         trace_program_layout: Optional[str] = None,
+        min_hit_group_count: int = 0,
+        min_miss_count: int = 0,
+        min_callable_count: int = 0,
     ) -> None:
+        minimum_counts = {
+            "min_hit_group_count": min_hit_group_count,
+            "min_miss_count": min_miss_count,
+            "min_callable_count": min_callable_count,
+        }
+        for name, value in minimum_counts.items():
+            if not isinstance(value, int) or value < 0:
+                raise ValueError(f"{name} must be a non-negative integer")
+
         if trace_program_layout is not None:
             legacy_options = {
                 "hit_groups": hit_groups,
@@ -557,6 +586,11 @@ class FunctionNodeRayTracing(FunctionNode):
         elif hit_groups is None:
             raise ValueError(
                 "hit_groups must be specified when trace_program_layout is not provided"
+            )
+        elif any(minimum_counts.values()):
+            raise ValueError(
+                "min_hit_group_count, min_miss_count, and min_callable_count are only valid "
+                "with trace_program_layout"
             )
 
         normalized_hit_groups = [
@@ -589,6 +623,9 @@ class FunctionNodeRayTracing(FunctionNode):
             max_ray_payload_size,
             max_attribute_size,
             flags,
+            min_hit_group_count,
+            min_miss_count,
+            min_callable_count,
         )
 
         super().__init__(
@@ -604,6 +641,9 @@ class FunctionNodeRayTracing(FunctionNode):
                 "max_ray_payload_size": max_ray_payload_size,
                 "max_attribute_size": max_attribute_size,
                 "flags": flags,
+                "min_hit_group_count": min_hit_group_count,
+                "min_miss_count": min_miss_count,
+                "min_callable_count": min_callable_count,
                 "signature": ray_tracing_signature,
             },
         )
@@ -618,6 +658,9 @@ class FunctionNodeRayTracing(FunctionNode):
         info.ray_tracing_hit_group_names = d["hit_group_names"]
         info.ray_tracing_callable_entry_points = d["callable_entry_points"]
         info.ray_tracing_trace_program_layout = d["trace_program_layout"]
+        info.ray_tracing_min_hit_group_count = d["min_hit_group_count"]
+        info.ray_tracing_min_miss_count = d["min_miss_count"]
+        info.ray_tracing_min_callable_count = d["min_callable_count"]
         info.ray_tracing_max_recursion = d["max_recursion"]
         info.ray_tracing_max_ray_payload_size = d["max_ray_payload_size"]
         info.ray_tracing_max_attribute_size = d["max_attribute_size"]

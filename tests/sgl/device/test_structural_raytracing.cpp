@@ -310,7 +310,19 @@ TEST_CASE_GPU("structural ray tracing native bridge")
             = session->load_module_from_source("structural_composed_stage_test", k_structural_source);
         ref<SlangModule> support = session->load_module_from_source(
             "structural_composed_support_test",
-            "export uint structural_support_value() { return 1; }"
+            R"SLANG(
+interface IStructuralSupport
+{
+    uint value();
+}
+
+struct StructuralSupport : IStructuralSupport
+{
+    uint value() { return 1; }
+}
+
+export uint structural_support_value() { return 1; }
+)SLANG"
         );
         ref<SlangModule> composed = session->compose_modules("structural_composed_test", {support, module});
         ref<SlangModule> nested = session->compose_modules("structural_nested_composed_test", {support, composed});
@@ -319,6 +331,43 @@ TEST_CASE_GPU("structural ray tracing native bridge")
         REQUIRE(entry_point);
         CHECK_EQ(entry_point->module(), module.get());
         CHECK_EQ(entry_point->stage(), ShaderStage::miss);
+
+        const TypeConformance support_conformance{"IStructuralSupport", "StructuralSupport", 7};
+        const std::span<const TypeConformance> support_conformances(&support_conformance, 1);
+        ref<sgl::SlangEntryPoint> conformance_entry_point
+            = composed->checked_entry_point("Miss2", ShaderStage::miss, support_conformances);
+        REQUIRE(conformance_entry_point);
+        CHECK_EQ(conformance_entry_point->module(), module.get());
+        CHECK_EQ(conformance_entry_point->stage(), ShaderStage::miss);
+
+        ref<sgl::SlangEntryPoint> legacy_conformance_entry_point
+            = composed->entry_point("explicit_compute", support_conformances);
+        REQUIRE(legacy_conformance_entry_point);
+        CHECK_EQ(legacy_conformance_entry_point->module(), module.get());
+        CHECK_EQ(legacy_conformance_entry_point->stage(), ShaderStage::compute);
+
+        ref<SlangModule> structural_program
+            = session->compose_modules("structural_composed_conformance_test", {composed}, support_conformances);
+        StructuralRayTracingBindings conformance_bindings
+            = create_structural_ray_tracing_bindings(structural_program.get(), "SparseLayout");
+        CHECK_EQ(conformance_bindings.entry_points.size(), 6);
+
+        std::vector<std::pair<std::string, ShaderStage>> expected_entry_points;
+        for (const auto& structural_entry_point : conformance_bindings.entry_points) {
+            expected_entry_points.emplace_back(structural_entry_point->name(), structural_entry_point->stage());
+        }
+        ref<ShaderProgram> retained_program
+            = session->link_program({structural_program}, conformance_bindings.entry_points);
+        REQUIRE(retained_program);
+
+        session->recreate_session();
+
+        REQUIRE_EQ(conformance_bindings.entry_points.size(), expected_entry_points.size());
+        for (size_t i = 0; i < expected_entry_points.size(); ++i) {
+            CHECK_EQ(conformance_bindings.entry_points[i]->name(), expected_entry_points[i].first);
+            CHECK_EQ(conformance_bindings.entry_points[i]->stage(), expected_entry_points[i].second);
+        }
+        REQUIRE(retained_program->layout());
 
         ref<SlangModule> duplicate_a
             = session->load_module_from_source("structural_duplicate_a", k_ambiguous_stage_source);

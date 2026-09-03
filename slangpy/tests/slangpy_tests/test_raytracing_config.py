@@ -54,6 +54,9 @@ def test_legacy_ray_tracing_configuration_and_signature() -> None:
         "max_ray_payload_size": 48,
         "max_attribute_size": 12,
         "flags": int(RayTracingPipelineFlags.skip_triangles),
+        "min_hit_group_count": 0,
+        "min_miss_count": 0,
+        "min_callable_count": 0,
     }
     assert node.slangpy_signature == node.ray_tracing_signature
 
@@ -96,6 +99,9 @@ def test_structural_ray_tracing_configuration() -> None:
         max_attribute_size=16,
         flags=RayTracingPipelineFlags.skip_procedurals,
         trace_program_layout="FirstProgramLayout",
+        min_hit_group_count=6,
+        min_miss_count=3,
+        min_callable_count=2,
     )
     second = make_function_node().ray_tracing(trace_program_layout="SecondProgramLayout")
 
@@ -110,10 +116,16 @@ def test_structural_ray_tracing_configuration() -> None:
     assert configuration["max_ray_payload_size"] == 64
     assert configuration["max_attribute_size"] == 16
     assert configuration["flags"] == int(RayTracingPipelineFlags.skip_procedurals)
+    assert configuration["min_hit_group_count"] == 6
+    assert configuration["min_miss_count"] == 3
+    assert configuration["min_callable_count"] == 2
     assert first.ray_tracing_signature != second.ray_tracing_signature
 
     info = first.calc_build_info()
     assert info.ray_tracing_trace_program_layout == "FirstProgramLayout"
+    assert info.ray_tracing_min_hit_group_count == 6
+    assert info.ray_tracing_min_miss_count == 3
+    assert info.ray_tracing_min_callable_count == 2
     assert info.ray_tracing_hit_groups == []
     assert info.ray_tracing_miss_entry_points == []
     assert info.ray_tracing_callable_entry_points == []
@@ -144,3 +156,26 @@ def test_ray_tracing_requires_one_configuration_mode() -> None:
 
     with pytest.raises(ValueError, match="non-empty string"):
         make_function_node().ray_tracing(trace_program_layout="")
+
+
+def test_structural_minimum_counts_affect_signature() -> None:
+    first = make_function_node().ray_tracing(
+        trace_program_layout="ProgramLayout", min_hit_group_count=1
+    )
+    second = make_function_node().ray_tracing(
+        trace_program_layout="ProgramLayout", min_hit_group_count=6
+    )
+
+    assert first.ray_tracing_signature != second.ray_tracing_signature
+
+
+@pytest.mark.parametrize(
+    "option_name",
+    ["min_hit_group_count", "min_miss_count", "min_callable_count"],
+)
+def test_structural_minimum_counts_reject_invalid_values(option_name: str) -> None:
+    with pytest.raises(ValueError, match=option_name):
+        make_function_node().ray_tracing(trace_program_layout="ProgramLayout", **{option_name: -1})
+
+    with pytest.raises(ValueError, match="only valid with trace_program_layout"):
+        make_function_node().ray_tracing([], **{option_name: 1})

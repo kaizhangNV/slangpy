@@ -283,6 +283,12 @@ void SlangSession::recreate_session()
     for (auto module : m_registered_modules) {
         module->load(build);
     }
+    // Entry points can be declared in one module while resolving specialization
+    // and conformance types from a later-created composed module. Rebuild them
+    // only after every module is available in the new session.
+    for (auto module : m_registered_modules) {
+        module->load_registered_entry_points(build);
+    }
     for (auto program : m_registered_programs) {
         program->link(build);
     }
@@ -1070,13 +1076,12 @@ void SlangModule::load(SlangSessionBuild& build_data) const
 
     // Output the built module.
     build_data.modules[this] = std::move(data);
+}
 
-    // Build all registered entry points (only for non-composed modules).
-    if (!desc.is_composed()) {
-        for (auto entry_point : m_registered_entry_points) {
-            entry_point->init(build_data);
-        }
-    }
+void SlangModule::load_registered_entry_points(SlangSessionBuild& build_data) const
+{
+    for (auto entry_point : m_registered_entry_points)
+        entry_point->init(build_data);
 }
 
 void SlangModule::store_built_data(SlangSessionBuild& build_data)
@@ -1356,7 +1361,11 @@ ref<SlangEntryPoint> SlangModule::create_entry_point(
         }
 
         ref<SlangModule> defining_module = candidates.front();
-        desc.type_lookup_module = defining_module;
+        // Materialize the entry point from its defining leaf, but resolve type
+        // conformances and specialization arguments against the full composition.
+        // Sibling modules commonly provide the concrete types requested by a
+        // scene-specialized program.
+        desc.type_lookup_module = ref(const_cast<SlangModule*>(this));
         auto entry_point = make_ref<SlangEntryPoint>(defining_module, desc);
         entry_point->init(build);
         entry_point->store_built_data(build);
@@ -1382,8 +1391,9 @@ ref<SlangEntryPoint> SlangModule::create_entry_point(
                     SGL_CHECK(found, "Entry point \"{}\" not found in nested composed module", name);
                 }
 
-                // Use the defining module for both construction and type lookups.
-                desc.type_lookup_module = ref(const_cast<SlangModule*>(defining_mod.get()));
+                // Construct the entry point from its defining leaf, but retain the
+                // full composition for conformance and specialization type lookups.
+                desc.type_lookup_module = ref(const_cast<SlangModule*>(this));
                 auto ep = make_ref<SlangEntryPoint>(ref(const_cast<SlangModule*>(defining_mod.get())), desc);
                 ep->init(build);
                 ep->store_built_data(build);

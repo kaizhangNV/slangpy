@@ -2,6 +2,18 @@
 import "slangpy";
 import slang.raytracing;
 
+interface IStructuralHitColor
+{
+    float3 evaluate(float2 barycentrics);
+}
+
+struct BarycentricHitColor : IStructuralHitColor
+{
+    uint dummy;
+
+    float3 evaluate(float2 barycentrics) { return float3(barycentrics, 0); }
+}
+
 struct Payload
 {
     float3 color;
@@ -21,13 +33,13 @@ struct TestHitContext : rt::IHitContext
     typealias Record = void;
 }
 
-namespace StructuralCanaryStages
-{
+namespace StructuralCanaryStages {
 struct TestClosestHit : rt::IClosestHitShader<::TestHitContext>
 {
     void invoke(rt::ClosestHitInput<::TestHitContext> input)
     {
-        input.payload.color = float3(input.triangle.barycentricCoord, 0);
+        IStructuralHitColor hitColor = createDynamicObject<IStructuralHitColor>(0, 0);
+        input.payload.color = hitColor.evaluate(input.triangle.barycentricCoord);
     }
 }
 
@@ -48,10 +60,7 @@ struct TestMissContext : rt::IMissGroupContext
 
 struct TestMiss : rt::IMissShader<TestMissContext>
 {
-    void invoke(rt::MissInput<TestMissContext> input)
-    {
-        input.payload.color = float3(1, 0, 1);
-    }
+    void invoke(rt::MissInput<TestMissContext> input) { input.payload.color = float3(1, 0, 1); }
 }
 
 struct TestMissGroup : rt::IMissGroup

@@ -410,6 +410,9 @@ public:
     /// Loads slang module and outputs the resulting SlangModuleData in current build info.
     void load(SlangSessionBuild& build) const;
 
+    /// Rebuilds registered entry points after every module in the session has loaded.
+    void load_registered_entry_points(SlangSessionBuild& build) const;
+
     /// Finds this module in current build and updates internal m_data to point at it.
     void store_built_data(SlangSessionBuild& build_data);
 

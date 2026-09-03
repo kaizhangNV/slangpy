@@ -4,7 +4,7 @@ import pytest
 import numpy as np
 
 import slangpy as spy
-from slangpy import DeviceType, Module
+from slangpy import DeviceType, Module, TypeConformance
 from slangpy.types.tensor import Tensor
 from slangpy.testing import helpers
 
@@ -181,10 +181,16 @@ def test_structural_raytracing(device_type: DeviceType):
     )
     module = Module(session.load_module("test_raytracing_structural.slang"))
 
-    module.trace.ray_tracing(
-        trace_program_layout="TestProgramLayout",
-        max_recursion=1,
-        max_ray_payload_size=12,
+    (
+        module.trace.type_conformances(
+            [TypeConformance("IStructuralHitColor", "BarycentricHitColor", 0)]
+        ).ray_tracing(
+            trace_program_layout="TestProgramLayout",
+            min_hit_group_count=6,
+            min_miss_count=3,
+            max_recursion=1,
+            max_ray_payload_size=12,
+        )
     )(tid=spy.call_id(), tlas=tlas, _result=tensor)
 
     data = tensor.to_numpy()
@@ -193,6 +199,40 @@ def test_structural_raytracing(device_type: DeviceType):
     assert np.allclose(data[0, 63, :], [1, 0, 0], atol=0.01)
     assert np.allclose(data[63, 0, :], [0, 1, 0], atol=0.01)
     assert np.allclose(data[63, 63, :], [1, 0, 1], atol=0.01)
+
+    prelude_trace = (
+        module.trace.prelude(
+            """
+struct PreludeHitColor : IStructuralHitColor
+{
+    float3 evaluate(float2 barycentrics)
+    {
+        return float3(barycentrics.yx, 0.5);
+    }
+}
+"""
+        )
+        .type_conformances([TypeConformance("IStructuralHitColor", "PreludeHitColor", 0)])
+        .ray_tracing(
+            trace_program_layout="TestProgramLayout",
+            min_hit_group_count=6,
+            min_miss_count=3,
+            max_recursion=1,
+            max_ray_payload_size=12,
+        )
+    )
+
+    for reload_programs in (False, True):
+        if reload_programs:
+            device.reload_all_programs()
+            # Tensor dtype reflection belongs to the previous Slang session.
+            tensor = Tensor.zeros(device, (64, 64, 3), dtype=float)
+        prelude_trace(tid=spy.call_id(), tlas=tlas, _result=tensor)
+        data = tensor.to_numpy()
+        assert np.allclose(data[0, 0, :], [0, 0, 0.5], atol=0.01)
+        assert np.allclose(data[0, 63, :], [0, 1, 0.5], atol=0.01)
+        assert np.allclose(data[63, 0, :], [1, 0, 0.5], atol=0.01)
+        assert np.allclose(data[63, 63, :], [1, 0, 1], atol=0.01)
 
 
 if __name__ == "__main__":
