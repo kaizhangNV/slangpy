@@ -33,21 +33,25 @@ motivated this work.
   pipeline entry points, hit groups, and physical SBT arrays.
 - [x] (2026-09-14 19:00Z) Exposed schema selections through nanobind and `FunctionNode.ray_tracing`, preserving the
   legacy API and including all selections and bytes in cache identity.
-- [x] (2026-09-14 20:24Z) Added native and Python regression coverage for schema reflection,
+- [x] (2026-09-14 19:24Z) Added native and Python regression coverage for schema reflection,
   overlapping payload-local indices, closed and open schema entries, repeated/sparse records,
   exact and zero-filled record bytes, invalid selections, composed modules, hot reload, generated
   name collisions, and Metal's reflected no-op/folded-stage shapes.
-- [x] (2026-09-14 20:37Z) Reconfigured and rebuilt against exact Slang commit
+- [x] (2026-09-14 19:37Z) Reconfigured and rebuilt against exact Slang commit
   `cdecb75031c1ce125985e51032c00a11c1f85492`; generated the stub, passed pre-commit and pyright,
   passed 121 focused native assertions and 19 Python configuration tests, and passed both legacy
   and repeated-record structural Vulkan runtime canaries.
-- [x] (2026-09-14 20:39Z) Reproduced the CUDA dispatch crash in both the structural canary and the
+- [x] (2026-09-14 19:39Z) Reproduced the CUDA dispatch crash in both the structural canary and the
   unchanged legacy canary (exit 139), establishing it as an inherited CUDA/OptiX test-host or
   backend baseline issue rather than a schema-only bridge regression.
-- [x] (2026-09-14 20:58Z) Committed the validated bridge as
+- [x] (2026-09-14 19:58Z) Committed the validated bridge as
   `93b0e98b0e20f913e381d9b7a6809f95634b7236` and pushed
   `codex/dynamic-schema-host-bridge` to the user's SlangPy fork. This documentation closeout is a
   follow-up on the same branch; the outer Falcor gitlink will pin its resulting commit.
+- [x] (2026-09-14 20:23Z) Corrected the native bridge regression to expect zero native
+  payload/attribute pipeline sizes on Metal, as required by the reflection contract. The focused
+  Vulkan bridge still passes 121/121 assertions and the full pre-commit suite passes; the Metal
+  worker rerun is the remaining confirmation for this follow-up.
 
 ## Surprises and Discoveries
 
@@ -87,6 +91,13 @@ motivated this work.
   `test_structural_raytracing[DeviceType.cuda]` both terminate with signal 11 at their respective
   dispatch calls, while both Vulkan variants pass.
 
+- Observation: Metal correctly reflects zero for the native pipeline payload-size and hit-attribute
+  settings because those host pipeline settings do not exist on Metal. The first cross-platform
+  worker exposed that the native bridge test had incorrectly assumed portable-target values 4 and
+  8 on every backend; the implementation itself returned the specified Metal values.
+  Evidence: the Apple M4 worker built Slang and SGL, then reported only the two expectation
+  mismatches in the 123-assertion bridge test.
+
 ## Decision Log
 
 - Decision: identify host selections with reflected source type full names and translate them to
@@ -114,6 +125,12 @@ motivated this work.
   targets.
   Rationale: Metal's finalized schema intentionally clears those per-stage target names, but
   silently dropping a portable stage would create an invalid native pipeline.
+  Date/Author: 2026-09-14 / Codex.
+
+- Decision: test native payload and attribute maxima as zero on Metal and retain the reflected 4/8
+  expectations on targets with native pipeline size settings.
+  Rationale: these values are target pipeline requirements, not ordinary source type sizes; making
+  up nonzero Metal values would contradict the proposal and mislead hosts.
   Date/Author: 2026-09-14 / Codex.
 
 ## Outcomes and Retrospective

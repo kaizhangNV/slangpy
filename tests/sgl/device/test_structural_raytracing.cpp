@@ -467,8 +467,15 @@ export uint structural_support_value() { return 1; }
         REQUIRE_EQ(bindings.callable_entry_points.size(), 2);
         CHECK_EQ(bindings.callable_entry_points[0], bindings.callable_entry_points[1]);
         CHECK_EQ(bindings.callable_shader_record_data[1], std::vector<uint8_t>({7, 0, 0, 0}));
-        CHECK_EQ(bindings.max_ray_payload_size, 4);
-        CHECK_EQ(bindings.max_attribute_size, 8);
+        if (ctx.device->info().type == DeviceType::metal) {
+            // Metal has no host pipeline payload/attribute size settings, so the corresponding
+            // native ABI reflection values are intentionally zero.
+            CHECK_EQ(bindings.max_ray_payload_size, 0);
+            CHECK_EQ(bindings.max_attribute_size, 0);
+        } else {
+            CHECK_EQ(bindings.max_ray_payload_size, 4);
+            CHECK_EQ(bindings.max_attribute_size, 8);
+        }
 
         StructuralRayTracingBindings zero_initialized = create_structural_ray_tracing_bindings(
             module.get(),
