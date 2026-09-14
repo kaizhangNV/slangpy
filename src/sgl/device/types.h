@@ -71,6 +71,7 @@ enum class Feature : uint32_t {
     shader_execution_reordering = static_cast<uint32_t>(rhi::Feature::ShaderExecutionReordering),
     ray_tracing_motion_blur = static_cast<uint32_t>(rhi::Feature::RayTracingMotionBlur),
     ray_tracing_validation = static_cast<uint32_t>(rhi::Feature::RayTracingValidation),
+    opacity_micromap = static_cast<uint32_t>(rhi::Feature::OpacityMicromap),
     cluster_acceleration_structure = static_cast<uint32_t>(rhi::Feature::ClusterAccelerationStructure),
     // Other features
     timestamp_query = static_cast<uint32_t>(rhi::Feature::TimestampQuery),
@@ -152,6 +153,7 @@ SGL_ENUM_INFO(
         {Feature::shader_execution_reordering, "shader_execution_reordering"},
         {Feature::ray_tracing_motion_blur, "ray_tracing_motion_blur"},
         {Feature::ray_tracing_validation, "ray_tracing_validation"},
+        {Feature::opacity_micromap, "opacity_micromap"},
         {Feature::cluster_acceleration_structure, "cluster_acceleration_structure"},
         {Feature::timestamp_query, "timestamp_query"},
         {Feature::timestamp_calibration, "timestamp_calibration"},

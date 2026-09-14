@@ -273,25 +273,34 @@ SGL_PY_EXPORT(device_shader)
         .def(
             "structural_ray_tracing_bindings",
             [](const SlangModule* self,
-               std::string_view layout_name,
-               uint32_t min_hit_group_count,
-               uint32_t min_miss_count,
-               uint32_t min_callable_count)
+               std::string_view schema_name,
+               std::vector<std::string> hit_group_types,
+               std::vector<std::string> miss_shader_types,
+               std::vector<std::string> callable_shader_types,
+               std::vector<std::vector<uint8_t>> hit_group_record_data,
+               std::vector<std::vector<uint8_t>> miss_shader_record_data,
+               std::vector<std::vector<uint8_t>> callable_shader_record_data)
             {
                 return create_structural_ray_tracing_bindings(
                     self,
-                    layout_name,
+                    schema_name,
                     {
-                        .min_hit_group_count = min_hit_group_count,
-                        .min_miss_count = min_miss_count,
-                        .min_callable_count = min_callable_count,
+                        .hit_group_types = std::move(hit_group_types),
+                        .miss_shader_types = std::move(miss_shader_types),
+                        .callable_shader_types = std::move(callable_shader_types),
+                        .hit_group_record_data = std::move(hit_group_record_data),
+                        .miss_shader_record_data = std::move(miss_shader_record_data),
+                        .callable_shader_record_data = std::move(callable_shader_record_data),
                     }
                 );
             },
-            "layout_name"_a,
-            "min_hit_group_count"_a = 0,
-            "min_miss_count"_a = 0,
-            "min_callable_count"_a = 0
+            "schema_name"_a,
+            "hit_group_types"_a = std::vector<std::string>{},
+            "miss_shader_types"_a = std::vector<std::string>{},
+            "callable_shader_types"_a = std::vector<std::string>{},
+            "hit_group_record_data"_a = std::vector<std::vector<uint8_t>>{},
+            "miss_shader_record_data"_a = std::vector<std::vector<uint8_t>>{},
+            "callable_shader_record_data"_a = std::vector<std::vector<uint8_t>>{}
         );
 
     nb::class_<SlangEntryPoint, Object>(m, "SlangEntryPoint", D(SlangEntryPoint))

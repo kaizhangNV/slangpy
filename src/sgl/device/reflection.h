@@ -14,6 +14,7 @@
 
 #include <slang.h>
 
+#include <algorithm>
 #include <map>
 #include <optional>
 #include <string>
@@ -1144,9 +1145,9 @@ public:
 
     ProgramLayoutEntryPointList entry_points() const;
 
-    /// Find and snapshot a structural ray-tracing program layout by type name.
+    /// Find and snapshot a structural ray-tracing program schema by type name.
     /// The returned value owns all scalar/string metadata and uses lifetime-safe SGL wrappers for types.
-    ref<const TraceProgramLayoutInfo> find_trace_program_layout(std::string_view name) const;
+    ref<const TraceProgramSchemaInfo> find_trace_program_schema(std::string_view name) const;
 
     /// Find a given type by name. Handles generic specilization if generic
     /// variable values are provided.
@@ -1277,53 +1278,86 @@ struct SGL_API TraceProgramStageInfo {
 
 /// Value representation of one structural hit group.
 struct SGL_API TraceProgramHitGroupInfo {
-    int64_t slot{0};
+    int64_t function_index{-1};
+    bool is_linked{false};
     ref<const TypeReflection> type;
     std::string type_name;
     ref<const TypeReflection> context_type;
     ref<const TypeReflection> record_type;
+    ref<const TypeLayoutReflection> record_type_layout;
     ref<const TypeReflection> primitive_type;
     ref<const TypeReflection> intersection_attributes_type;
+    std::string closest_hit_entry_point_name;
     std::optional<TraceProgramStageInfo> closest_hit;
     std::optional<TraceProgramStageInfo> any_hit;
     std::optional<TraceProgramStageInfo> intersection;
 };
 
-/// Value representation of one structural miss group.
-struct SGL_API TraceProgramMissGroupInfo {
-    int64_t slot{0};
+/// Value representation of one structural miss shader.
+struct SGL_API TraceProgramMissShaderInfo {
+    int64_t function_index{-1};
+    bool is_linked{false};
     ref<const TypeReflection> type;
     std::string type_name;
     ref<const TypeReflection> context_type;
     ref<const TypeReflection> record_type;
+    ref<const TypeLayoutReflection> record_type_layout;
     std::optional<TraceProgramStageInfo> miss;
 };
 
-/// Value representation of one structural callable group.
-struct SGL_API TraceProgramCallableGroupInfo {
-    int64_t slot{0};
+/// Value representation of one structural callable shader.
+struct SGL_API TraceProgramCallableShaderInfo {
+    int64_t function_index{-1};
+    bool is_linked{false};
     ref<const TypeReflection> type;
     std::string type_name;
     ref<const TypeReflection> context_type;
     ref<const TypeReflection> record_type;
+    ref<const TypeLayoutReflection> record_type_layout;
     ref<const TypeReflection> data_type;
     std::optional<TraceProgramStageInfo> callable;
 };
 
-/// Lifetime-safe value snapshot of a structural ray-tracing program layout.
+/// Value representation of one payload partition in a structural ray-tracing schema.
+struct SGL_API TraceProgramPayloadInfo {
+    ref<const TypeReflection> type;
+    std::string type_name;
+    ref<const TypeLayoutReflection> type_layout;
+    size_t native_payload_size{0};
+    std::vector<TraceProgramHitGroupInfo> hit_groups;
+    std::vector<TraceProgramMissShaderInfo> miss_shaders;
+};
+
+/// Lifetime-safe value snapshot of a structural ray-tracing program schema.
 /// Raw structural reflection handles are owned by Slang's ProgramLayout and are never retained here.
-class SGL_API TraceProgramLayoutInfo : public Object {
-    SGL_OBJECT(TraceProgramLayoutInfo)
+class SGL_API TraceProgramSchemaInfo : public Object {
+    SGL_OBJECT(TraceProgramSchemaInfo)
 public:
     bool is_valid() const { return source_layout && source_layout->is_valid(); }
 
     ref<const ProgramLayout> source_layout;
+    std::string name;
     ref<const TypeReflection> type;
     std::string type_name;
     ref<const TypeReflection> trace_context_type;
-    std::vector<TraceProgramHitGroupInfo> hit_groups;
-    std::vector<TraceProgramMissGroupInfo> miss_groups;
-    std::vector<TraceProgramCallableGroupInfo> callable_groups;
+    bool is_hit_group_section_open{false};
+    bool is_miss_shader_section_open{false};
+    bool is_callable_shader_section_open{false};
+    size_t hit_record_stride{0};
+    size_t miss_record_stride{0};
+    size_t callable_record_stride{0};
+    size_t max_native_hit_attribute_size{0};
+    size_t metal_record_header_size{0};
+    std::vector<TraceProgramPayloadInfo> payloads;
+    std::vector<TraceProgramCallableShaderInfo> callable_shaders;
+
+    size_t max_native_payload_size() const
+    {
+        size_t result = 0;
+        for (const auto& payload : payloads)
+            result = std::max(result, payload.native_payload_size);
+        return result;
+    }
 };
 
 

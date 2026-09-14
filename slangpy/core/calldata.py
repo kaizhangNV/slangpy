@@ -21,7 +21,6 @@ from slangpy import (
     SlangLinkOptions,
     NativeHandle,
     DeviceType,
-    HitGroupDesc,
     TypeConformance,
     is_torch_bridge_using_fallback,
     get_torch_bridge_fallback_reason,
@@ -534,7 +533,12 @@ class CallData(NativeCallData):
                 build_info.module.pipeline_cache[hash] = self.pipeline
             elif build_info.pipeline_type == PipelineType.ray_tracing:
                 # Create ray tracing pipeline
-                if build_info.ray_tracing_trace_program_layout is not None:
+                miss_shader_record_data: list[list[int]] = []
+                hit_group_record_data: list[list[int]] = []
+                callable_shader_record_data: list[list[int]] = []
+                max_ray_payload_size = build_info.ray_tracing_max_ray_payload_size
+                max_attribute_size = build_info.ray_tracing_max_attribute_size
+                if build_info.ray_tracing_trace_program_schema is not None:
                     # Structural stages can reference types declared by generated prelude code,
                     # while their interfaces and implementations generally come from the base
                     # module. Compose the complete program before reflecting or materializing any
@@ -547,46 +551,33 @@ class CallData(NativeCallData):
                     )
                     eps = [program_module.entry_point("raygen_main")]
                     structural_bindings = program_module.structural_ray_tracing_bindings(
-                        build_info.ray_tracing_trace_program_layout,
-                        build_info.ray_tracing_min_hit_group_count,
-                        build_info.ray_tracing_min_miss_count,
-                        build_info.ray_tracing_min_callable_count,
+                        build_info.ray_tracing_trace_program_schema,
+                        build_info.ray_tracing_structural_hit_group_types,
+                        build_info.ray_tracing_structural_miss_shader_types,
+                        build_info.ray_tracing_structural_callable_shader_types,
+                        [
+                            list(data)
+                            for data in build_info.ray_tracing_structural_hit_group_record_data
+                        ],
+                        [
+                            list(data)
+                            for data in build_info.ray_tracing_structural_miss_shader_record_data
+                        ],
+                        [
+                            list(data)
+                            for data in build_info.ray_tracing_structural_callable_shader_record_data
+                        ],
                     )
                     eps.extend(structural_bindings.entry_points)
                     hit_groups = list(structural_bindings.hit_groups)
                     miss_entry_points = structural_bindings.miss_entry_points
                     hit_group_names = list(structural_bindings.hit_group_names)
                     callable_entry_points = structural_bindings.callable_entry_points
-
-                    # Hosts may reserve more physical SBT records than this typed structural route
-                    # declares. Materialize one collision-free empty group for every reflected hole,
-                    # matching the empty records accepted by the legacy pipeline path.
-                    if any(not name for name in hit_group_names):
-                        used_names = {"raygen_main"}
-                        used_names.update(name for name in hit_group_names if name)
-                        for hit_group in hit_groups:
-                            used_names.update(
-                                name
-                                for name in (
-                                    hit_group.hit_group_name,
-                                    hit_group.closest_hit_entry_point,
-                                    hit_group.any_hit_entry_point,
-                                    hit_group.intersection_entry_point,
-                                )
-                                if name
-                            )
-                        used_names.update(
-                            entry_point.name for entry_point in structural_bindings.entry_points
-                        )
-
-                        dummy_name_base = "__slangpy_structural_padding_hit_group"
-                        dummy_name = dummy_name_base
-                        suffix = 0
-                        while dummy_name in used_names:
-                            suffix += 1
-                            dummy_name = f"{dummy_name_base}_{suffix}"
-                        hit_groups.append(HitGroupDesc(dummy_name))
-                        hit_group_names = [name or dummy_name for name in hit_group_names]
+                    miss_shader_record_data = structural_bindings.miss_shader_record_data
+                    hit_group_record_data = structural_bindings.hit_group_record_data
+                    callable_shader_record_data = structural_bindings.callable_shader_record_data
+                    max_ray_payload_size = structural_bindings.max_ray_payload_size
+                    max_attribute_size = structural_bindings.max_attribute_size
                     program_modules = [program_module]
                 else:
                     eps = [module.entry_point("raygen_main", type_conformances)]
@@ -629,19 +620,24 @@ class CallData(NativeCallData):
                     program,
                     hit_groups=hit_groups,
                     max_recursion=build_info.ray_tracing_max_recursion,
-                    max_ray_payload_size=build_info.ray_tracing_max_ray_payload_size,
-                    max_attribute_size=build_info.ray_tracing_max_attribute_size,
+                    max_ray_payload_size=max_ray_payload_size,
+                    max_attribute_size=max_attribute_size,
                     flags=build_info.ray_tracing_flags,
                     defer_target_compilation=defer_target_compilation,
                     label=f"{build_info.module.name}_{build_info.name}_rt_call",
                 )
                 build_info.module.pipeline_cache[hash] = self.pipeline
                 self.shader_table = device.create_shader_table(
-                    program,
-                    ray_gen_entry_points=["raygen_main"],
-                    miss_entry_points=miss_entry_points,
-                    hit_group_names=hit_group_names,
-                    callable_entry_points=callable_entry_points,
+                    {
+                        "program": program,
+                        "ray_gen_entry_points": ["raygen_main"],
+                        "miss_entry_points": miss_entry_points,
+                        "hit_group_names": hit_group_names,
+                        "callable_entry_points": callable_entry_points,
+                        "miss_shader_record_data": miss_shader_record_data,
+                        "hit_group_record_data": hit_group_record_data,
+                        "callable_shader_record_data": callable_shader_record_data,
+                    }
                 )
                 build_info.module.shader_table_cache[hash] = self.shader_table
             else:

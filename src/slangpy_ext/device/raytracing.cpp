@@ -104,6 +104,9 @@ SGL_DICT_TO_DESC_FIELD_LIST(ray_gen_entry_points, std::string)
 SGL_DICT_TO_DESC_FIELD_LIST(miss_entry_points, std::string)
 SGL_DICT_TO_DESC_FIELD_LIST(hit_group_names, std::string)
 SGL_DICT_TO_DESC_FIELD_LIST(callable_entry_points, std::string)
+SGL_DICT_TO_DESC_FIELD_LIST(miss_shader_record_data, std::vector<uint8_t>)
+SGL_DICT_TO_DESC_FIELD_LIST(hit_group_record_data, std::vector<uint8_t>)
+SGL_DICT_TO_DESC_FIELD_LIST(callable_shader_record_data, std::vector<uint8_t>)
 SGL_DICT_TO_DESC_END()
 
 } // namespace sgl
@@ -490,7 +493,10 @@ SGL_PY_EXPORT(device_raytracing)
             "callable_entry_points",
             &ShaderTableDesc::callable_entry_points,
             D(ShaderTableDesc, callable_entry_points)
-        );
+        )
+        .def_rw("miss_shader_record_data", &ShaderTableDesc::miss_shader_record_data)
+        .def_rw("hit_group_record_data", &ShaderTableDesc::hit_group_record_data)
+        .def_rw("callable_shader_record_data", &ShaderTableDesc::callable_shader_record_data);
     nb::implicitly_convertible<nb::dict, ShaderTableDesc>();
 
     nb::class_<StructuralRayTracingBindings>(m, "StructuralRayTracingBindings")
@@ -498,7 +504,12 @@ SGL_PY_EXPORT(device_raytracing)
         .def_ro("hit_groups", &StructuralRayTracingBindings::hit_groups)
         .def_ro("miss_entry_points", &StructuralRayTracingBindings::miss_entry_points)
         .def_ro("hit_group_names", &StructuralRayTracingBindings::hit_group_names)
-        .def_ro("callable_entry_points", &StructuralRayTracingBindings::callable_entry_points);
+        .def_ro("callable_entry_points", &StructuralRayTracingBindings::callable_entry_points)
+        .def_ro("miss_shader_record_data", &StructuralRayTracingBindings::miss_shader_record_data)
+        .def_ro("hit_group_record_data", &StructuralRayTracingBindings::hit_group_record_data)
+        .def_ro("callable_shader_record_data", &StructuralRayTracingBindings::callable_shader_record_data)
+        .def_ro("max_ray_payload_size", &StructuralRayTracingBindings::max_ray_payload_size)
+        .def_ro("max_attribute_size", &StructuralRayTracingBindings::max_attribute_size);
 
     nb::class_<ShaderTable, DeviceChild>(m, "ShaderTable", D(ShaderTable));
 }

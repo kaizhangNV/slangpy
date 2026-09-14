@@ -355,38 +355,53 @@ struct ShaderTableDesc {
     std::vector<std::string> miss_entry_points;
     std::vector<std::string> hit_group_names;
     std::vector<std::string> callable_entry_points;
+    std::vector<std::vector<uint8_t>> miss_shader_record_data;
+    std::vector<std::vector<uint8_t>> hit_group_record_data;
+    std::vector<std::vector<uint8_t>> callable_shader_record_data;
 };
 
-/// Options controlling how reflected structural groups are placed in native shader-table arrays.
+/// Host-owned physical shader-table selections for one reflected structural schema.
 struct StructuralRayTracingBindingOptions {
-    /// Minimum number of hit-group records, including trailing empty records.
-    uint32_t min_hit_group_count{0};
-    /// Minimum number of miss records, including trailing empty records.
-    uint32_t min_miss_count{0};
-    /// Minimum number of callable records, including trailing empty records.
-    uint32_t min_callable_count{0};
+    /// Fully qualified source hit-group type for each physical record. An empty name creates an empty record.
+    std::vector<std::string> hit_group_types;
+    /// Fully qualified source miss-shader type for each physical record. An empty name creates an empty record.
+    std::vector<std::string> miss_shader_types;
+    /// Fully qualified source callable-shader type for each physical record. An empty name creates an empty record.
+    std::vector<std::string> callable_shader_types;
+    /// Optional application bytes parallel to hit_group_types. Empty bytes zero-initialize the reflected record type.
+    std::vector<std::vector<uint8_t>> hit_group_record_data;
+    /// Optional application bytes parallel to miss_shader_types. Empty bytes zero-initialize the reflected record type.
+    std::vector<std::vector<uint8_t>> miss_shader_record_data;
+    /// Optional application bytes parallel to callable_shader_types. Empty bytes zero-initialize the reflected record
+    /// type.
+    std::vector<std::vector<uint8_t>> callable_shader_record_data;
 };
 
-/// Native SGL inputs produced from one structural ray-tracing program layout.
+/// Native SGL inputs produced from one structural ray-tracing program schema and one host SBT instance.
 struct StructuralRayTracingBindings {
     std::vector<ref<SlangEntryPoint>> entry_points;
     std::vector<HitGroupDesc> hit_groups;
     std::vector<std::string> miss_entry_points;
     std::vector<std::string> hit_group_names;
     std::vector<std::string> callable_entry_points;
+    std::vector<std::vector<uint8_t>> miss_shader_record_data;
+    std::vector<std::vector<uint8_t>> hit_group_record_data;
+    std::vector<std::vector<uint8_t>> callable_shader_record_data;
+    size_t max_ray_payload_size{0};
+    size_t max_attribute_size{0};
 };
 
-/// Adapt an already reflected structural layout to SGL's existing ray-tracing descriptors.
+/// Adapt an already reflected structural schema and host-owned SBT selections to native descriptors.
 SGL_API StructuralRayTracingBindings create_structural_ray_tracing_bindings(
     const SlangModule* module,
-    const TraceProgramLayoutInfo* layout,
+    const TraceProgramSchemaInfo* schema,
     const StructuralRayTracingBindingOptions& options = {}
 );
 
-/// Find and adapt a structural layout by name.
+/// Find and adapt a structural schema by name.
 SGL_API StructuralRayTracingBindings create_structural_ray_tracing_bindings(
     const SlangModule* module,
-    std::string_view layout_name,
+    std::string_view schema_name,
     const StructuralRayTracingBindingOptions& options = {}
 );
 

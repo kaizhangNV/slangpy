@@ -49,7 +49,13 @@ class PipelineType(Enum):
 
 
 def _make_ray_tracing_signature(
-    trace_program_layout: Optional[str],
+    trace_program_schema: Optional[str],
+    structural_hit_group_types: Sequence[str],
+    structural_miss_shader_types: Sequence[str],
+    structural_callable_shader_types: Sequence[str],
+    structural_hit_group_record_data: Sequence[bytes],
+    structural_miss_shader_record_data: Sequence[bytes],
+    structural_callable_shader_record_data: Sequence[bytes],
     hit_groups: Sequence[HitGroupDesc],
     miss_entry_points: Sequence[str],
     hit_group_names: Optional[Sequence[str]],
@@ -58,14 +64,23 @@ def _make_ray_tracing_signature(
     max_ray_payload_size: int,
     max_attribute_size: int,
     flags: RayTracingPipelineFlags,
-    min_hit_group_count: int,
-    min_miss_count: int,
-    min_callable_count: int,
 ) -> str:
     """Return a stable signature for every ray-tracing pipeline configuration field."""
     configuration = {
-        "mode": "structural" if trace_program_layout is not None else "legacy",
-        "trace_program_layout": trace_program_layout,
+        "mode": "structural" if trace_program_schema is not None else "legacy",
+        "trace_program_schema": trace_program_schema,
+        "structural_hit_group_types": list(structural_hit_group_types),
+        "structural_miss_shader_types": list(structural_miss_shader_types),
+        "structural_callable_shader_types": list(structural_callable_shader_types),
+        "structural_hit_group_record_data": [
+            data.hex() for data in structural_hit_group_record_data
+        ],
+        "structural_miss_shader_record_data": [
+            data.hex() for data in structural_miss_shader_record_data
+        ],
+        "structural_callable_shader_record_data": [
+            data.hex() for data in structural_callable_shader_record_data
+        ],
         "hit_groups": [
             {
                 "hit_group_name": hit_group.hit_group_name,
@@ -82,9 +97,6 @@ def _make_ray_tracing_signature(
         "max_ray_payload_size": max_ray_payload_size,
         "max_attribute_size": max_attribute_size,
         "flags": int(flags),
-        "min_hit_group_count": min_hit_group_count,
-        "min_miss_count": min_miss_count,
-        "min_callable_count": min_callable_count,
     }
     return "ray_tracing:" + json.dumps(configuration, sort_keys=True, separators=(",", ":"))
 
@@ -116,10 +128,13 @@ class FunctionBuildInfo:
         self.ray_tracing_miss_entry_points: list[str] = []
         self.ray_tracing_hit_group_names: Optional[list[str]] = None
         self.ray_tracing_callable_entry_points: list[str] = []
-        self.ray_tracing_trace_program_layout: Optional[str] = None
-        self.ray_tracing_min_hit_group_count: int = 0
-        self.ray_tracing_min_miss_count: int = 0
-        self.ray_tracing_min_callable_count: int = 0
+        self.ray_tracing_trace_program_schema: Optional[str] = None
+        self.ray_tracing_structural_hit_group_types: list[str] = []
+        self.ray_tracing_structural_miss_shader_types: list[str] = []
+        self.ray_tracing_structural_callable_shader_types: list[str] = []
+        self.ray_tracing_structural_hit_group_record_data: list[bytes] = []
+        self.ray_tracing_structural_miss_shader_record_data: list[bytes] = []
+        self.ray_tracing_structural_callable_shader_record_data: list[bytes] = []
         self.ray_tracing_max_recursion: int = 0
         self.ray_tracing_max_ray_payload_size: int = 0
         self.ray_tracing_max_attribute_size: int = 8
@@ -241,22 +256,26 @@ class FunctionNode(NativeFunctionNode):
         hit_group_names: Optional[Sequence[str]] = None,
         callable_entry_points: Optional[Sequence[str]] = None,
         max_recursion: int = 1,
-        max_ray_payload_size: int = 32,
-        max_attribute_size: int = 8,
+        max_ray_payload_size: Optional[int] = None,
+        max_attribute_size: Optional[int] = None,
         flags: RayTracingPipelineFlags = RayTracingPipelineFlags.none,
         *,
-        trace_program_layout: Optional[str] = None,
-        min_hit_group_count: int = 0,
-        min_miss_count: int = 0,
-        min_callable_count: int = 0,
+        trace_program_schema: Optional[str] = None,
+        structural_hit_group_types: Optional[Sequence[str]] = None,
+        structural_miss_shader_types: Optional[Sequence[str]] = None,
+        structural_callable_shader_types: Optional[Sequence[str]] = None,
+        structural_hit_group_record_data: Optional[Sequence[bytes]] = None,
+        structural_miss_shader_record_data: Optional[Sequence[bytes]] = None,
+        structural_callable_shader_record_data: Optional[Sequence[bytes]] = None,
     ) -> "FunctionNodeRayTracing":
         """
         Specify either a legacy or structural ray tracing pipeline configuration.
 
-        ``trace_program_layout`` selects a structural ray tracing layout and cannot be combined
-        with the legacy hit-group, miss, hit-group-name, or callable configuration arguments.
-        The structural-only minimum counts retain trailing and sparse physical shader-table slots
-        required by a host acceleration-structure layout.
+        ``trace_program_schema`` selects a structural ray tracing schema. The structural type lists
+        define the host-owned physical shader-table records in order; an empty type name creates an
+        empty record, and a type may be repeated with different application bytes. Schema mode
+        reflects payload and hit-attribute sizes and cannot be combined with legacy shader lists or
+        explicit ABI sizes.
         """
         return FunctionNodeRayTracing(
             self,
@@ -268,10 +287,13 @@ class FunctionNode(NativeFunctionNode):
             max_ray_payload_size,
             max_attribute_size,
             flags,
-            trace_program_layout,
-            min_hit_group_count,
-            min_miss_count,
-            min_callable_count,
+            trace_program_schema,
+            structural_hit_group_types,
+            structural_miss_shader_types,
+            structural_callable_shader_types,
+            structural_hit_group_record_data,
+            structural_miss_shader_record_data,
+            structural_callable_shader_record_data,
         )
 
     @property
@@ -551,24 +573,18 @@ class FunctionNodeRayTracing(FunctionNode):
         hit_group_names: Optional[Sequence[str]],
         callable_entry_points: Optional[Sequence[str]],
         max_recursion: int,
-        max_ray_payload_size: int,
-        max_attribute_size: int,
+        max_ray_payload_size: Optional[int],
+        max_attribute_size: Optional[int],
         flags: RayTracingPipelineFlags,
-        trace_program_layout: Optional[str] = None,
-        min_hit_group_count: int = 0,
-        min_miss_count: int = 0,
-        min_callable_count: int = 0,
+        trace_program_schema: Optional[str] = None,
+        structural_hit_group_types: Optional[Sequence[str]] = None,
+        structural_miss_shader_types: Optional[Sequence[str]] = None,
+        structural_callable_shader_types: Optional[Sequence[str]] = None,
+        structural_hit_group_record_data: Optional[Sequence[bytes]] = None,
+        structural_miss_shader_record_data: Optional[Sequence[bytes]] = None,
+        structural_callable_shader_record_data: Optional[Sequence[bytes]] = None,
     ) -> None:
-        minimum_counts = {
-            "min_hit_group_count": min_hit_group_count,
-            "min_miss_count": min_miss_count,
-            "min_callable_count": min_callable_count,
-        }
-        for name, value in minimum_counts.items():
-            if not isinstance(value, int) or value < 0:
-                raise ValueError(f"{name} must be a non-negative integer")
-
-        if trace_program_layout is not None:
+        if trace_program_schema is not None:
             legacy_options = {
                 "hit_groups": hit_groups,
                 "miss_entry_points": miss_entry_points,
@@ -578,20 +594,87 @@ class FunctionNodeRayTracing(FunctionNode):
             conflicts = [name for name, value in legacy_options.items() if value is not None]
             if conflicts:
                 raise ValueError(
-                    "trace_program_layout cannot be combined with legacy ray tracing options: "
+                    "trace_program_schema cannot be combined with legacy ray tracing options: "
                     + ", ".join(conflicts)
                 )
-            if not trace_program_layout:
-                raise ValueError("trace_program_layout must be a non-empty string")
+            if not trace_program_schema:
+                raise ValueError("trace_program_schema must be a non-empty string")
+            if max_ray_payload_size is not None or max_attribute_size is not None:
+                raise ValueError(
+                    "trace_program_schema reflects max_ray_payload_size and max_attribute_size; "
+                    "do not specify them explicitly"
+                )
         elif hit_groups is None:
             raise ValueError(
-                "hit_groups must be specified when trace_program_layout is not provided"
+                "hit_groups must be specified when trace_program_schema is not provided"
             )
-        elif any(minimum_counts.values()):
-            raise ValueError(
-                "min_hit_group_count, min_miss_count, and min_callable_count are only valid "
-                "with trace_program_layout"
-            )
+
+        structural_options = {
+            "structural_hit_group_types": structural_hit_group_types,
+            "structural_miss_shader_types": structural_miss_shader_types,
+            "structural_callable_shader_types": structural_callable_shader_types,
+            "structural_hit_group_record_data": structural_hit_group_record_data,
+            "structural_miss_shader_record_data": structural_miss_shader_record_data,
+            "structural_callable_shader_record_data": structural_callable_shader_record_data,
+        }
+        if trace_program_schema is None:
+            conflicts = [name for name, value in structural_options.items() if value is not None]
+            if conflicts:
+                raise ValueError(
+                    "Structural shader-table options require trace_program_schema: "
+                    + ", ".join(conflicts)
+                )
+
+        normalized_structural_hit_group_types = list(structural_hit_group_types or ())
+        normalized_structural_miss_shader_types = list(structural_miss_shader_types or ())
+        normalized_structural_callable_shader_types = list(structural_callable_shader_types or ())
+        normalized_structural_hit_group_record_data = [
+            bytes(data) for data in (structural_hit_group_record_data or ())
+        ]
+        normalized_structural_miss_shader_record_data = [
+            bytes(data) for data in (structural_miss_shader_record_data or ())
+        ]
+        normalized_structural_callable_shader_record_data = [
+            bytes(data) for data in (structural_callable_shader_record_data or ())
+        ]
+        for kind, types, data in (
+            (
+                "hit-group",
+                normalized_structural_hit_group_types,
+                normalized_structural_hit_group_record_data,
+            ),
+            (
+                "miss-shader",
+                normalized_structural_miss_shader_types,
+                normalized_structural_miss_shader_record_data,
+            ),
+            (
+                "callable-shader",
+                normalized_structural_callable_shader_types,
+                normalized_structural_callable_shader_record_data,
+            ),
+        ):
+            if data and len(data) != len(types):
+                raise ValueError(
+                    f"Structural {kind} record-data count must be zero or match its type count"
+                )
+
+        normalized_max_ray_payload_size = (
+            0
+            if trace_program_schema is not None
+            else (32 if max_ray_payload_size is None else max_ray_payload_size)
+        )
+        normalized_max_attribute_size = (
+            0
+            if trace_program_schema is not None
+            else (8 if max_attribute_size is None else max_attribute_size)
+        )
+        for name, value in (
+            ("max_ray_payload_size", normalized_max_ray_payload_size),
+            ("max_attribute_size", normalized_max_attribute_size),
+        ):
+            if not isinstance(value, int) or value < 0:
+                raise ValueError(f"{name} must be a non-negative integer")
 
         normalized_hit_groups = [
             (
@@ -614,18 +697,21 @@ class FunctionNodeRayTracing(FunctionNode):
             callable_entry_points if callable_entry_points is not None else ()
         )
         ray_tracing_signature = _make_ray_tracing_signature(
-            trace_program_layout,
+            trace_program_schema,
+            normalized_structural_hit_group_types,
+            normalized_structural_miss_shader_types,
+            normalized_structural_callable_shader_types,
+            normalized_structural_hit_group_record_data,
+            normalized_structural_miss_shader_record_data,
+            normalized_structural_callable_shader_record_data,
             normalized_hit_groups,
             normalized_miss_entry_points,
             normalized_hit_group_names,
             normalized_callable_entry_points,
             max_recursion,
-            max_ray_payload_size,
-            max_attribute_size,
+            normalized_max_ray_payload_size,
+            normalized_max_attribute_size,
             flags,
-            min_hit_group_count,
-            min_miss_count,
-            min_callable_count,
         )
 
         super().__init__(
@@ -636,14 +722,17 @@ class FunctionNodeRayTracing(FunctionNode):
                 "miss_entry_points": normalized_miss_entry_points,
                 "hit_group_names": normalized_hit_group_names,
                 "callable_entry_points": normalized_callable_entry_points,
-                "trace_program_layout": trace_program_layout,
+                "trace_program_schema": trace_program_schema,
+                "structural_hit_group_types": normalized_structural_hit_group_types,
+                "structural_miss_shader_types": normalized_structural_miss_shader_types,
+                "structural_callable_shader_types": normalized_structural_callable_shader_types,
+                "structural_hit_group_record_data": normalized_structural_hit_group_record_data,
+                "structural_miss_shader_record_data": normalized_structural_miss_shader_record_data,
+                "structural_callable_shader_record_data": normalized_structural_callable_shader_record_data,
                 "max_recursion": max_recursion,
-                "max_ray_payload_size": max_ray_payload_size,
-                "max_attribute_size": max_attribute_size,
+                "max_ray_payload_size": normalized_max_ray_payload_size,
+                "max_attribute_size": normalized_max_attribute_size,
                 "flags": flags,
-                "min_hit_group_count": min_hit_group_count,
-                "min_miss_count": min_miss_count,
-                "min_callable_count": min_callable_count,
                 "signature": ray_tracing_signature,
             },
         )
@@ -657,10 +746,17 @@ class FunctionNodeRayTracing(FunctionNode):
         info.ray_tracing_miss_entry_points = d["miss_entry_points"]
         info.ray_tracing_hit_group_names = d["hit_group_names"]
         info.ray_tracing_callable_entry_points = d["callable_entry_points"]
-        info.ray_tracing_trace_program_layout = d["trace_program_layout"]
-        info.ray_tracing_min_hit_group_count = d["min_hit_group_count"]
-        info.ray_tracing_min_miss_count = d["min_miss_count"]
-        info.ray_tracing_min_callable_count = d["min_callable_count"]
+        info.ray_tracing_trace_program_schema = d["trace_program_schema"]
+        info.ray_tracing_structural_hit_group_types = d["structural_hit_group_types"]
+        info.ray_tracing_structural_miss_shader_types = d["structural_miss_shader_types"]
+        info.ray_tracing_structural_callable_shader_types = d["structural_callable_shader_types"]
+        info.ray_tracing_structural_hit_group_record_data = d["structural_hit_group_record_data"]
+        info.ray_tracing_structural_miss_shader_record_data = d[
+            "structural_miss_shader_record_data"
+        ]
+        info.ray_tracing_structural_callable_shader_record_data = d[
+            "structural_callable_shader_record_data"
+        ]
         info.ray_tracing_max_recursion = d["max_recursion"]
         info.ray_tracing_max_ray_payload_size = d["max_ray_payload_size"]
         info.ray_tracing_max_attribute_size = d["max_attribute_size"]

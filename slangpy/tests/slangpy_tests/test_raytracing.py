@@ -2,6 +2,7 @@
 
 import pytest
 import numpy as np
+import struct
 
 import slangpy as spy
 from slangpy import DeviceType, Module, TypeConformance
@@ -181,24 +182,42 @@ def test_structural_raytracing(device_type: DeviceType):
     )
     module = Module(session.load_module("test_raytracing_structural.slang"))
 
+    hit_record_0 = struct.pack("<3f", 10, 20, 30)
+    hit_record_1 = struct.pack("<3f", 40, 50, 60)
+    miss_record_0 = struct.pack("<3f", 70, 80, 90)
+    miss_record_1 = struct.pack("<3f", 100, 110, 120)
+
     (
         module.trace.type_conformances(
             [TypeConformance("IStructuralHitColor", "BarycentricHitColor", 0)]
         ).ray_tracing(
-            trace_program_layout="TestProgramLayout",
-            min_hit_group_count=6,
-            min_miss_count=3,
+            trace_program_schema="TestProgramSchema",
+            structural_hit_group_types=[
+                "StructuralCanaryStages.TestHitGroup",
+                "StructuralCanaryStages.TestHitGroup",
+                "",
+                "",
+                "",
+                "",
+            ],
+            structural_miss_shader_types=[
+                "StructuralCanaryStages.TestMiss",
+                "StructuralCanaryStages.TestMiss",
+                "",
+            ],
+            structural_hit_group_record_data=[hit_record_0, hit_record_1] + [b""] * 4,
+            structural_miss_shader_record_data=[miss_record_0, miss_record_1, b""],
             max_recursion=1,
-            max_ray_payload_size=12,
         )
     )(tid=spy.call_id(), tlas=tlas, _result=tensor)
 
     data = tensor.to_numpy()
 
-    assert np.allclose(data[0, 0, :], [0, 0, 0], atol=0.01)
-    assert np.allclose(data[0, 63, :], [1, 0, 0], atol=0.01)
-    assert np.allclose(data[63, 0, :], [0, 1, 0], atol=0.01)
-    assert np.allclose(data[63, 63, :], [1, 0, 1], atol=0.01)
+    assert np.allclose(data[0, 0, :], [10, 20, 30], atol=0.01)
+    assert np.allclose(data[0, 63, :], [41, 50, 60], atol=0.01)
+    assert np.allclose(data[63, 0, :], [10, 21, 30], atol=0.01)
+    assert np.allclose(data[63, 31, :], [70, 80, 90], atol=0.01)
+    assert np.allclose(data[63, 63, :], [100, 110, 120], atol=0.01)
 
     prelude_trace = (
         module.trace.prelude(
@@ -214,11 +233,23 @@ struct PreludeHitColor : IStructuralHitColor
         )
         .type_conformances([TypeConformance("IStructuralHitColor", "PreludeHitColor", 0)])
         .ray_tracing(
-            trace_program_layout="TestProgramLayout",
-            min_hit_group_count=6,
-            min_miss_count=3,
+            trace_program_schema="TestProgramSchema",
+            structural_hit_group_types=[
+                "StructuralCanaryStages.TestHitGroup",
+                "StructuralCanaryStages.TestHitGroup",
+                "",
+                "",
+                "",
+                "",
+            ],
+            structural_miss_shader_types=[
+                "StructuralCanaryStages.TestMiss",
+                "StructuralCanaryStages.TestMiss",
+                "",
+            ],
+            structural_hit_group_record_data=[hit_record_0, hit_record_1] + [b""] * 4,
+            structural_miss_shader_record_data=[miss_record_0, miss_record_1, b""],
             max_recursion=1,
-            max_ray_payload_size=12,
         )
     )
 
@@ -229,10 +260,11 @@ struct PreludeHitColor : IStructuralHitColor
             tensor = Tensor.zeros(device, (64, 64, 3), dtype=float)
         prelude_trace(tid=spy.call_id(), tlas=tlas, _result=tensor)
         data = tensor.to_numpy()
-        assert np.allclose(data[0, 0, :], [0, 0, 0.5], atol=0.01)
-        assert np.allclose(data[0, 63, :], [0, 1, 0.5], atol=0.01)
-        assert np.allclose(data[63, 0, :], [1, 0, 0.5], atol=0.01)
-        assert np.allclose(data[63, 63, :], [1, 0, 1], atol=0.01)
+        assert np.allclose(data[0, 0, :], [10, 20, 30.5], atol=0.01)
+        assert np.allclose(data[0, 63, :], [40, 51, 60.5], atol=0.01)
+        assert np.allclose(data[63, 0, :], [11, 20, 30.5], atol=0.01)
+        assert np.allclose(data[63, 31, :], [70, 80, 90], atol=0.01)
+        assert np.allclose(data[63, 63, :], [100, 110, 120], atol=0.01)
 
 
 if __name__ == "__main__":

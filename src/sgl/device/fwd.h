@@ -83,9 +83,10 @@ class ProgramLayoutParameterList;
 class ProgramLayoutEntryPointList;
 struct TraceProgramStageInfo;
 struct TraceProgramHitGroupInfo;
-struct TraceProgramMissGroupInfo;
-struct TraceProgramCallableGroupInfo;
-class TraceProgramLayoutInfo;
+struct TraceProgramMissShaderInfo;
+struct TraceProgramCallableShaderInfo;
+struct TraceProgramPayloadInfo;
+class TraceProgramSchemaInfo;
 
 // refl
 

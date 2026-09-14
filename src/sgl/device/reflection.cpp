@@ -403,14 +403,14 @@ ProgramLayoutEntryPointList ProgramLayout::entry_points() const
     return ProgramLayoutEntryPointList(ref(this));
 }
 
-ref<const TraceProgramLayoutInfo> ProgramLayout::find_trace_program_layout(std::string_view name) const
+ref<const TraceProgramSchemaInfo> ProgramLayout::find_trace_program_schema(std::string_view name) const
 {
     std::string name_string(name);
-    slang::TraceProgramLayoutReflection* slang_layout = slang_target()->findTraceProgramLayout(name_string.c_str());
-    if (!slang_layout)
+    slang::TraceProgramSchemaReflection* slang_schema = slang_target()->findTraceProgramSchema(name_string.c_str());
+    if (!slang_schema)
         return nullptr;
 
-    auto result = make_ref<TraceProgramLayoutInfo>();
+    auto result = make_ref<TraceProgramSchemaInfo>();
     result->source_layout = ref(this);
 
     auto wrap_type = [this](slang::TypeReflection* type)
@@ -434,55 +434,85 @@ ref<const TraceProgramLayoutInfo> ProgramLayout::find_trace_program_layout(std::
         return info;
     };
 
-    result->type = wrap_type(slang_layout->getType());
+    if (const char* schema_name = slang_schema->getName())
+        result->name = schema_name;
+    result->type = wrap_type(slang_schema->getType());
     result->type_name = type_name(result->type);
-    result->trace_context_type = wrap_type(slang_layout->getTraceContextType());
+    result->trace_context_type = wrap_type(slang_schema->getTraceContextType());
+    result->is_hit_group_section_open = slang_schema->isHitGroupSectionOpen();
+    result->is_miss_shader_section_open = slang_schema->isMissShaderSectionOpen();
+    result->is_callable_shader_section_open = slang_schema->isCallableShaderSectionOpen();
+    result->hit_record_stride = slang_schema->getHitRecordStride();
+    result->miss_record_stride = slang_schema->getMissRecordStride();
+    result->callable_record_stride = slang_schema->getCallableRecordStride();
+    result->max_native_hit_attribute_size = slang_schema->getMaxNativeHitAttributeSize();
+    result->metal_record_header_size = slang_schema->getMetalRecordHeaderSize();
 
-    result->hit_groups.reserve(narrow_cast<size_t>(slang_layout->getHitGroupCount()));
-    for (SlangUInt index = 0; index < slang_layout->getHitGroupCount(); ++index) {
-        slang::RayTracingHitGroupReflection* group = slang_layout->getHitGroup(index);
-        SGL_CHECK(group, "Structural ray-tracing hit group {} has no reflection data", index);
-        TraceProgramHitGroupInfo info;
-        info.slot = narrow_cast<int64_t>(group->getSlot());
-        info.type = wrap_type(group->getType());
-        info.type_name = type_name(info.type);
-        info.context_type = wrap_type(group->getContextType());
-        info.record_type = wrap_type(group->getRecordType());
-        info.primitive_type = wrap_type(group->getPrimitiveType());
-        info.intersection_attributes_type = wrap_type(group->getIntersectionAttributesType());
-        info.closest_hit = copy_stage(group->getClosestHit());
-        info.any_hit = copy_stage(group->getAnyHit());
-        info.intersection = copy_stage(group->getIntersection());
-        result->hit_groups.push_back(std::move(info));
+    result->payloads.reserve(narrow_cast<size_t>(slang_schema->getPayloadCount()));
+    for (SlangUInt payload_index = 0; payload_index < slang_schema->getPayloadCount(); ++payload_index) {
+        slang::RayTracingPayloadReflection* payload = slang_schema->getPayload(payload_index);
+        SGL_CHECK(payload, "Structural ray-tracing payload {} has no reflection data", payload_index);
+        TraceProgramPayloadInfo payload_info;
+        payload_info.type = wrap_type(payload->getType());
+        payload_info.type_name = type_name(payload_info.type);
+        payload_info.type_layout = detail::from_slang(m_owner, payload->getTypeLayout());
+        payload_info.native_payload_size = payload->getNativePayloadSize();
+
+        payload_info.hit_groups.reserve(narrow_cast<size_t>(payload->getHitGroupCount()));
+        for (SlangUInt index = 0; index < payload->getHitGroupCount(); ++index) {
+            slang::RayTracingHitGroupReflection* group = payload->getHitGroup(index);
+            SGL_CHECK(group, "Structural ray-tracing hit group {} has no reflection data", index);
+            TraceProgramHitGroupInfo info;
+            info.function_index = narrow_cast<int64_t>(group->getFunctionIndex());
+            info.is_linked = group->isLinked();
+            info.type = wrap_type(group->getType());
+            info.type_name = type_name(info.type);
+            info.context_type = wrap_type(group->getContextType());
+            info.record_type = wrap_type(group->getRecordType());
+            info.record_type_layout = detail::from_slang(m_owner, group->getRecordTypeLayout());
+            info.primitive_type = wrap_type(group->getPrimitiveType());
+            info.intersection_attributes_type = wrap_type(group->getIntersectionAttributesType());
+            if (const char* entry_point_name = group->getClosestHitEntryPointName())
+                info.closest_hit_entry_point_name = entry_point_name;
+            info.closest_hit = copy_stage(group->getClosestHit());
+            info.any_hit = copy_stage(group->getAnyHit());
+            info.intersection = copy_stage(group->getIntersection());
+            payload_info.hit_groups.push_back(std::move(info));
+        }
+
+        payload_info.miss_shaders.reserve(narrow_cast<size_t>(payload->getMissShaderCount()));
+        for (SlangUInt index = 0; index < payload->getMissShaderCount(); ++index) {
+            slang::RayTracingMissShaderReflection* shader = payload->getMissShader(index);
+            SGL_CHECK(shader, "Structural ray-tracing miss shader {} has no reflection data", index);
+            TraceProgramMissShaderInfo info;
+            info.function_index = narrow_cast<int64_t>(shader->getFunctionIndex());
+            info.is_linked = shader->isLinked();
+            info.type = wrap_type(shader->getType());
+            info.type_name = type_name(info.type);
+            info.context_type = wrap_type(shader->getContextType());
+            info.record_type = wrap_type(shader->getRecordType());
+            info.record_type_layout = detail::from_slang(m_owner, shader->getRecordTypeLayout());
+            info.miss = copy_stage(shader->getMiss());
+            payload_info.miss_shaders.push_back(std::move(info));
+        }
+        result->payloads.push_back(std::move(payload_info));
     }
 
-    result->miss_groups.reserve(narrow_cast<size_t>(slang_layout->getMissGroupCount()));
-    for (SlangUInt index = 0; index < slang_layout->getMissGroupCount(); ++index) {
-        slang::RayTracingMissGroupReflection* group = slang_layout->getMissGroup(index);
-        SGL_CHECK(group, "Structural ray-tracing miss group {} has no reflection data", index);
-        TraceProgramMissGroupInfo info;
-        info.slot = narrow_cast<int64_t>(group->getSlot());
-        info.type = wrap_type(group->getType());
+    result->callable_shaders.reserve(narrow_cast<size_t>(slang_schema->getCallableShaderCount()));
+    for (SlangUInt index = 0; index < slang_schema->getCallableShaderCount(); ++index) {
+        slang::RayTracingCallableShaderReflection* shader = slang_schema->getCallableShader(index);
+        SGL_CHECK(shader, "Structural ray-tracing callable shader {} has no reflection data", index);
+        TraceProgramCallableShaderInfo info;
+        info.function_index = narrow_cast<int64_t>(shader->getFunctionIndex());
+        info.is_linked = shader->isLinked();
+        info.type = wrap_type(shader->getType());
         info.type_name = type_name(info.type);
-        info.context_type = wrap_type(group->getContextType());
-        info.record_type = wrap_type(group->getRecordType());
-        info.miss = copy_stage(group->getMiss());
-        result->miss_groups.push_back(std::move(info));
-    }
-
-    result->callable_groups.reserve(narrow_cast<size_t>(slang_layout->getCallableGroupCount()));
-    for (SlangUInt index = 0; index < slang_layout->getCallableGroupCount(); ++index) {
-        slang::RayTracingCallableGroupReflection* group = slang_layout->getCallableGroup(index);
-        SGL_CHECK(group, "Structural ray-tracing callable group {} has no reflection data", index);
-        TraceProgramCallableGroupInfo info;
-        info.slot = narrow_cast<int64_t>(group->getSlot());
-        info.type = wrap_type(group->getType());
-        info.type_name = type_name(info.type);
-        info.context_type = wrap_type(group->getContextType());
-        info.record_type = wrap_type(group->getRecordType());
-        info.data_type = wrap_type(group->getDataType());
-        info.callable = copy_stage(group->getCallable());
-        result->callable_groups.push_back(std::move(info));
+        info.context_type = wrap_type(shader->getContextType());
+        info.record_type = wrap_type(shader->getRecordType());
+        info.record_type_layout = detail::from_slang(m_owner, shader->getRecordTypeLayout());
+        info.data_type = wrap_type(shader->getDataType());
+        info.callable = copy_stage(shader->getCallable());
+        result->callable_shaders.push_back(std::move(info));
     }
 
     return result;
