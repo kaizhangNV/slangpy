@@ -44,8 +44,10 @@ motivated this work.
 - [x] (2026-09-14 20:39Z) Reproduced the CUDA dispatch crash in both the structural canary and the
   unchanged legacy canary (exit 139), establishing it as an inherited CUDA/OptiX test-host or
   backend baseline issue rather than a schema-only bridge regression.
-- [ ] Commit the validated SlangPy work, push `codex/dynamic-schema-host-bridge` to the user's
-  SlangPy fork, then publish the outer Falcor gitlink update on its authorized fork branch.
+- [x] (2026-09-14 20:58Z) Committed the validated bridge as
+  `93b0e98b0e20f913e381d9b7a6809f95634b7236` and pushed
+  `codex/dynamic-schema-host-bridge` to the user's SlangPy fork. This documentation closeout is a
+  follow-up on the same branch; the outer Falcor gitlink will pin its resulting commit.
 
 ## Surprises and Discoveries
 
